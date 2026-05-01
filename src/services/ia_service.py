@@ -13,7 +13,7 @@ grok = AsyncOpenAI(
 )
 
 # Cliente OpenAI para Whisper (áudio) e visão (foto)
-openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
+openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
 CATEGORIAS = "Alimentação, Transporte, Vestuário, Moradia, Saúde, Educação, Lazer, Outros"
 HOJE = str(date.today())
