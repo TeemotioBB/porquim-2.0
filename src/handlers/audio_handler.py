@@ -1,3 +1,4 @@
+import base64
 import httpx
 from src.services.ia_service import processar_gasto_audio
 from src.services.report_service import verificar_limite_pos_gasto
@@ -18,44 +19,47 @@ CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 _Salvo com sucesso!_ 🎉"""
 
 
-async def handle_audio_message(message: dict) -> dict:
-    """
-    message deve conter:
-      - audio.url ou audio.base64
-      - audio.mimetype (ex: audio/ogg; codecs=opus)
-      - key.remoteJid
-    """
-    numero = message["key"]["remoteJid"].split("@")[0]
-    audio_info = message.get("audio", {})
+async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
+    """Baixa áudio já decodificado via Evolution API."""
+    mime_type = msg_data.get("message", {}).get("audioMessage", {}).get("mimetype", "audio/ogg")
 
-    audio_bytes: bytes | None = None
-    mime_type = audio_info.get("mimetype", "audio/ogg")
+    url = f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                url,
+                json={
+                    "message": {
+                        "key": msg_data.get("key", {}),
+                        "message": msg_data.get("message", {})
+                    }
+                },
+                headers={"apikey": settings.EVOLUTION_API_KEY}
+            )
+            print(f"📥 Evolution getBase64: {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                b64 = data.get("base64") or data.get("data")
+                if b64:
+                    # Remove prefixo data:audio/ogg;base64, se existir
+                    if "," in b64:
+                        b64 = b64.split(",", 1)[1]
+                    return base64.b64decode(b64), mime_type
+    except Exception as e:
+        print(f"❌ Erro download áudio Evolution: {e}")
 
-    # Tenta baixar via URL (Evolution passa mediaUrl)
-    url = audio_info.get("url") or audio_info.get("mediaUrl")
-    if url:
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
-                    url,
-                    headers={"apikey": settings.EVOLUTION_API_KEY}
-                )
-                if resp.status_code == 200:
-                    audio_bytes = resp.content
-        except Exception as e:
-            print(f"❌ Erro ao baixar áudio: {e}")
+    return None, mime_type
 
-    # Fallback: base64 direto
-    if not audio_bytes:
-        b64 = audio_info.get("base64") or audio_info.get("data")
-        if b64:
-            import base64
-            audio_bytes = base64.b64decode(b64)
+
+async def handle_audio_message(msg_data: dict, remote_jid: str) -> dict:
+    numero = remote_jid.split("@")[0]
+
+    audio_bytes, mime_type = await _baixar_audio_evolution(msg_data)
 
     if not audio_bytes:
         return {
             "type": "text",
-            "content": "❌ Não consegui processar o áudio. Tente enviar novamente ou descreva o gasto em texto."
+            "content": "❌ Não consegui baixar o áudio. Tente enviar novamente ou descreva o gasto em texto."
         }
 
     try:
