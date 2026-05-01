@@ -13,50 +13,57 @@ async def evolution_webhook(request: Request, any: str = None):
     data = await request.json()
     
     event = any or "webhook"
-    print(f"\n📥 [WEBHOOK] Evento recebido: {event}")
+    print(f"\n📥 [WEBHOOK] Evento: {event}")
 
-    # Debug completo só para messages-upsert
-    if event == "messages-upsert":
-        print(f"Payload completo: {json.dumps(data, indent=2, ensure_ascii=False)[:1500]}...")
-
-    # 🔥 EXTRAÇÃO CORRETA para Evolution API v2.3.7
+    # Detecção da mensagem
     message = None
+    text_body = None
+
     if isinstance(data, dict):
         if "data" in data and isinstance(data["data"], dict):
             if "message" in data["data"] and isinstance(data["data"]["message"], dict):
-                conversation = data["data"]["message"].get("conversation")
-                if conversation:  # mensagem de texto encontrada
-                    message = {
-                        "text": {"body": conversation},
-                        "key": data["data"].get("key", {})
-                    }
+                text_body = data["data"]["message"].get("conversation")
+                message = data["data"]
+            elif "messages" in data["data"] and data["data"]["messages"]:
+                message = data["data"]["messages"][0]
 
-    if message:
-        text = message["text"]["body"]
-        print(f"✅ Mensagem de texto detectada: {text}")
+    if text_body:
+        print(f"✅ Mensagem detectada: '{text_body}'")
 
-        response = await handle_text_message(message)
+        response = await handle_text_message({
+            "text": {"body": text_body},
+            "key": message.get("key", {}) if message else {}
+        })
+
+        # === ENVIO DA RESPOSTA ===
+        send_url = f"{settings.EVOLUTION_API_URL}/message/sendText/{settings.EVOLUTION_INSTANCE}"
+        print(f"🔄 Tentando enviar resposta para: {send_url}")
 
         try:
             async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"{settings.EVOLUTION_API_URL}/message/sendText/{settings.EVOLUTION_INSTANCE}",
+                resp = await client.post(
+                    send_url,
                     json={
-                        "number": message["key"]["remoteJid"],
+                        "number": message.get("key", {}).get("remoteJid"),
                         "text": response["content"]
                     },
                     headers={"apikey": settings.EVOLUTION_API_KEY},
                     timeout=10
                 )
-                print("✅ Resposta enviada com sucesso para o WhatsApp!")
+                print(f"📤 Status da resposta Evolution: {resp.status_code} {resp.text[:200]}")
+                if resp.status_code == 200:
+                    print("✅ Resposta enviada com sucesso!")
+                else:
+                    print("❌ Evolution retornou erro (provavelmente instance name errado)")
         except Exception as e:
-            print(f"❌ Erro ao enviar resposta: {e}")
+            print(f"❌ Erro ao chamar Evolution: {e}")
     else:
-        print("⚠️ Nenhum payload de mensagem de texto encontrado (normal para outros eventos)")
+        print("⚠️ Evento sem mensagem de texto (normal)")
 
     return {"status": "ok"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
-#fix: extração correta do texto da Evolution v2.3.7 (data.message.conversation)
+
+#fix final: envio de resposta corrigido + log completo
