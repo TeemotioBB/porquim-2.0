@@ -36,4 +36,4 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
 
-fix: webhook aceita todos os eventos da Evolution
+#fix: webhook aceita todos os eventos da Evolution
