@@ -2,12 +2,36 @@ from src.core.config import settings
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from src.core.database import get_pool, salvar_gasto, buscar_gastos_mes, total_gasto_mes, buscar_limite
+from pydantic import BaseModel
+from typing import Optional
+
+from src.core.database import (
+    get_pool,
+    buscar_gastos_mes,
+    atualizar_gasto,
+    deletar_gasto,
+    salvar_limite,
+    buscar_limite,
+)
 from src.handlers.text_handler import handle_text_message
 from src.handlers.audio_handler import handle_audio_message
 from src.handlers.image_handler import handle_image_message
 
+
+# ── Emoji por categoria ──────────────────────────────────────────────────────
+EMOJI_CAT = {
+    "Alimentação": "🍔", "Transporte": "🚗", "Moradia": "🏠",
+    "Saúde": "💊", "Lazer": "🎮", "Vestuário": "👕",
+    "Educação": "📚", "Outros": "📦",
+}
+
+def emoji_para(cat: str) -> str:
+    return EMOJI_CAT.get(cat, "📦")
+
+
+# ── Lifespan ─────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("🐘 Conectando ao PostgreSQL...")
@@ -17,8 +41,31 @@ async def lifespan(app: FastAPI):
     yield
     print("👋 Encerrando Porquim...")
 
+
 app = FastAPI(title="Porquim 2.0 🐷", lifespan=lifespan)
 
+# ── CORS ──────────────────────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Modelos ───────────────────────────────────────────────────────────────────
+class EditarGastoBody(BaseModel):
+    descricao: str
+    valor: float
+    categoria: str
+    forma_pagamento: str
+
+class LimiteBody(BaseModel):
+    valor: float
+
+
+# ── Helper Evolution ─────────────────────────────────────────────────────────
 async def _enviar_resposta(remote_jid: str, texto: str):
     url = f"{settings.EVOLUTION_API_URL}/message/sendText/{settings.EVOLUTION_INSTANCE}"
     try:
@@ -34,84 +81,151 @@ async def _enviar_resposta(remote_jid: str, texto: str):
         print(f"❌ Erro ao enviar resposta: {e}")
         return False
 
+
+# ════════════════════════════════════════════════════════════════════
+# ROTAS
+# ════════════════════════════════════════════════════════════════════
+
 @app.get("/")
 async def health():
     return {"status": "Porquim 2.0 🐷 online!"}
 
-# ==================== API PARA O DASHBOARD ====================
 
-@app.get("/api/verificar/{numero}")
-async def verificar_usuario(numero: str):
+@app.get("/api/verificar/{usuario}")
+async def verificar_usuario(usuario: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT COUNT(*) as total FROM gastos WHERE usuario = $1", numero
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM gastos WHERE usuario = $1", usuario
         )
-        existe = row["total"] > 0
-    return {"existe": existe}
+    return {"existe": int(count) > 0}
+
 
 @app.get("/api/resumo/{usuario}")
-async def api_resumo(usuario: str, ano: int = None, mes: int = None):
-    from datetime import date
-    hoje = date.today()
-    ano = ano or hoje.year
-    mes = mes or hoje.month
-
+async def resumo(usuario: str, ano: int, mes: int):
     gastos = await buscar_gastos_mes(usuario, ano, mes)
-    total = await total_gasto_mes(usuario, ano, mes)
-    limite = await buscar_limite(usuario) if (ano == hoje.year and mes == hoje.month) else None
+    total = sum(float(g["valor"]) for g in gastos)
 
-    categorias = {}
+    cat_map: dict[str, float] = {}
     for g in gastos:
-        cat = g["categoria"]
-        categorias[cat] = categorias.get(cat, 0) + float(g["valor"])
+        cat_map[g["categoria"]] = cat_map.get(g["categoria"], 0.0) + float(g["valor"])
 
-    cat_list = [{"nome": cat, "valor": val, "pct": round(val / total * 100, 1) if total > 0 else 0} 
-                for cat, val in sorted(categorias.items(), key=lambda x: x[1], reverse=True)]
+    categorias = sorted(
+        [
+            {
+                "nome": cat,
+                "valor": round(val, 2),
+                "pct": round(val / total * 100, 1) if total > 0 else 0,
+                "emoji": emoji_para(cat),
+            }
+            for cat, val in cat_map.items()
+        ],
+        key=lambda x: x["valor"],
+        reverse=True,
+    )
+
+    limite = await buscar_limite(usuario)
+    pct_limite = round(total / limite * 100, 1) if limite else 0
 
     return {
-        "total": total,
+        "total": round(total, 2),
         "num_gastos": len(gastos),
+        "categorias": categorias,
         "limite": limite,
-        "pct_limite": round((total / limite * 100), 1) if limite else 0,
-        "categorias": cat_list,
-        "gastos": gastos
+        "pct_limite": pct_limite,
     }
 
+
 @app.get("/api/gastos/{usuario}")
-async def api_gastos(usuario: str, ano: int = None, mes: int = None, categoria: str = None):
-    gastos = await buscar_gastos_mes(usuario, ano or date.today().year, mes or date.today().month)
+async def listar_gastos(usuario: str, ano: int, mes: int, categoria: Optional[str] = None):
+    gastos = await buscar_gastos_mes(usuario, ano, mes)
+
     if categoria:
         gastos = [g for g in gastos if g["categoria"] == categoria]
-    return {"gastos": gastos}
 
-@app.get("/api/evolucao/{usuario}")
-async def api_evolucao(usuario: str):
-    # Simplificado por enquanto - pode expandir depois
-    return {"meses": []}  # placeholder
+    return {
+        "gastos": [
+            {
+                "id": g["id"],
+                "descricao": g["descricao"],
+                "valor": float(g["valor"]),
+                "categoria": g["categoria"],
+                "forma_pagamento": g["forma_pagamento"],
+                "data": g["data"].isoformat(),
+                "fonte": g.get("fonte", "texto"),
+                "emoji": emoji_para(g["categoria"]),
+            }
+            for g in gastos
+        ]
+    }
+
 
 @app.put("/api/gastos/{usuario}/{gasto_id}")
-async def api_editar_gasto(usuario: str, gasto_id: int, dados: dict):
-    from src.core.database import atualizar_gasto
-    ok = await atualizar_gasto(gasto_id, usuario, dados)
+async def editar_gasto(usuario: str, gasto_id: int, body: EditarGastoBody):
+    ok = await atualizar_gasto(gasto_id, usuario, body.model_dump())
     if not ok:
         raise HTTPException(status_code=404, detail="Gasto não encontrado")
-    return {"status": "ok"}
+    return {"ok": True}
+
 
 @app.delete("/api/gastos/{usuario}/{gasto_id}")
-async def api_deletar_gasto(usuario: str, gasto_id: int):
-    from src.core.database import deletar_gasto
+async def excluir_gasto(usuario: str, gasto_id: int):
     ok = await deletar_gasto(gasto_id, usuario)
     if not ok:
         raise HTTPException(status_code=404, detail="Gasto não encontrado")
-    return {"status": "ok"}
+    return {"ok": True}
 
-# ==================== WEBHOOK ====================
+
+@app.get("/api/evolucao/{usuario}")
+async def evolucao(usuario: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                EXTRACT(YEAR  FROM data)::int AS ano,
+                EXTRACT(MONTH FROM data)::int AS mes,
+                COALESCE(SUM(valor), 0)::float AS total
+            FROM gastos
+            WHERE usuario = $1
+              AND data >= (CURRENT_DATE - INTERVAL '5 months')::date
+            GROUP BY ano, mes
+            ORDER BY ano, mes
+            """,
+            usuario,
+        )
+
+    MESES_SHORT = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
+                   "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+
+    return {
+        "meses": [
+            {
+                "nome": MESES_SHORT[r["mes"]],
+                "ano": r["ano"],
+                "mes": r["mes"],
+                "total": round(r["total"], 2),
+            }
+            for r in rows
+        ]
+    }
+
+
+@app.post("/api/limite/{usuario}")
+async def definir_limite(usuario: str, body: LimiteBody):
+    if body.valor <= 0:
+        raise HTTPException(status_code=400, detail="Valor inválido")
+    await salvar_limite(usuario, body.valor)
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════
+# WEBHOOK WHATSAPP
+# ════════════════════════════════════════════════════════════════════
 
 @app.post("/webhook")
 @app.post("/webhook/{any:path}")
 async def evolution_webhook(request: Request, any: str = None):
-    # ... (seu webhook atual continua igual, sem mudança)
     data = await request.json()
     event = any or "webhook"
     print(f"\n📥 [WEBHOOK] Evento: {event}")
@@ -121,8 +235,20 @@ async def evolution_webhook(request: Request, any: str = None):
 
     msg_data = data["data"]
 
-    if isinstance(msg_data, list) or msg_data.get("key", {}).get("fromMe", False):
+    if isinstance(msg_data, list):
         return {"status": "ok"}
+
+    if msg_data.get("key", {}).get("fromMe", False):
+        return {"status": "ok"}
+
+    msg_id = msg_data.get("key", {}).get("id", "")
+    if msg_id and msg_id in app.state.processed_ids:
+        print(f"⚠️ Duplicata ignorada: {msg_id}")
+        return {"status": "ok"}
+    if msg_id:
+        app.state.processed_ids.add(msg_id)
+        if len(app.state.processed_ids) > 200:
+            app.state.processed_ids.pop()
 
     remote_jid = msg_data.get("key", {}).get("remoteJid")
     msg = msg_data.get("message", {})
@@ -131,8 +257,8 @@ async def evolution_webhook(request: Request, any: str = None):
         return {"status": "ok"}
 
     response = None
-    text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
 
+    text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
     if text_body:
         print(f"✅ Texto: '{text_body}'")
         response = await handle_text_message({
@@ -142,16 +268,29 @@ async def evolution_webhook(request: Request, any: str = None):
 
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
-        response = await handle_audio_message(msg_data, remote_jid, None)
+        response = await handle_audio_message(
+            msg_data=msg_data,
+            remote_jid=remote_jid,
+            ultimo_gasto=None
+        )
 
     elif "imageMessage" in msg:
-        print("📷 Imagem recebida")
-        response = await handle_image_message(msg_data, remote_jid, None)
+        caption = msg["imageMessage"].get("caption", "").strip()
+        print(f"📷 Imagem recebida (caption: '{caption}')")
+        response = await handle_image_message(
+            msg_data=msg_data,
+            remote_jid=remote_jid
+        )
+
+    else:
+        print(f"⚠️ Tipo não suportado: {list(msg.keys())}")
+        return {"status": "ok"}
 
     if response:
         await _enviar_resposta(remote_jid, response["content"])
 
     return {"status": "ok"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
