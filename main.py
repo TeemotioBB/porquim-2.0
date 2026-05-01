@@ -6,9 +6,13 @@ import uvicorn
 
 app = FastAPI(title="Porquim 2.0")
 
+# 🔥 Novo webhook que aceita TODOS os caminhos da Evolution
 @app.post("/webhook")
-async def evolution_webhook(request: Request):
+@app.post("/webhook/{any:path}")
+async def evolution_webhook(request: Request, any: str = None):
     data = await request.json()
+    
+    print(f"📥 Mensagem recebida da Evolution: {any or 'webhook'}")  # debug
     
     if "messages" in data and data["messages"]:
         msg = data["messages"][0]
@@ -30,3 +34,6 @@ async def evolution_webhook(request: Request):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
+
+
+fix: webhook aceita todos os eventos da Evolution
