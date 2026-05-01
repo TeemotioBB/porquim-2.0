@@ -1,16 +1,14 @@
 from src.core.config import settings
 
-# DEBUG TEMPORÁRIO - remover depois
+# DEBUG TEMPORÁRIO
 print(f"🔑 API KEY carregada: {settings.EVOLUTION_API_KEY[:10]}...")
 print(f"🌐 URL: {settings.EVOLUTION_API_URL}")
 print(f"📱 INSTANCE: {settings.EVOLUTION_INSTANCE}")
 
 from fastapi import FastAPI, Request
-from src.core.config import settings
 from src.handlers.text_handler import handle_text_message
 import httpx
 import uvicorn
-import json
 
 app = FastAPI(title="Porquim 2.0")
 
@@ -18,11 +16,10 @@ app = FastAPI(title="Porquim 2.0")
 @app.post("/webhook/{any:path}")
 async def evolution_webhook(request: Request, any: str = None):
     data = await request.json()
-    
+
     event = any or "webhook"
     print(f"\n📥 [WEBHOOK] Evento: {event}")
 
-    # Detecção da mensagem
     text_body = None
     remote_jid = None
 
@@ -41,7 +38,9 @@ async def evolution_webhook(request: Request, any: str = None):
         })
 
         send_url = f"{settings.EVOLUTION_API_URL}/message/sendText/{settings.EVOLUTION_INSTANCE}"
-        print(f"🔄 Enviando resposta para: {send_url}")
+        print(f"🔄 Enviando para: {send_url}")
+        print(f"📦 Número destino: {remote_jid}")
+        print(f"🔑 API Key usada: {settings.EVOLUTION_API_KEY}")
 
         try:
             async with httpx.AsyncClient() as client:
@@ -51,11 +50,11 @@ async def evolution_webhook(request: Request, any: str = None):
                         "number": remote_jid,
                         "text": response["content"]
                     },
-                    headers={"x-api-key": settings.EVOLUTION_API_KEY},   # ← ALTERADO AQUI
+                    headers={"apikey": settings.EVOLUTION_API_KEY},  # ✅ CORRETO
                     timeout=10
                 )
                 print(f"📤 Status Evolution: {resp.status_code} {resp.text[:300]}")
-                if resp.status_code == 200:
+                if resp.status_code in [200, 201]:  # ✅ 201 também é sucesso
                     print("✅ Resposta enviada com sucesso!")
                 else:
                     print("❌ Evolution retornou erro")
@@ -68,5 +67,5 @@ async def evolution_webhook(request: Request, any: str = None):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
-
+    
 #fix final: envio de resposta corrigido + log completo
