@@ -16,27 +16,22 @@ CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 📅 {data}
 🔖 {hashtag}{alerta}
 
-_Salvo com sucesso!_ 🎉"""
+_Salvo com sucesso!_ 🎉
+_Para remover este gasto responda: *remover*_
+_Para editar responda: *editar*_"""
 
 
 async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
-    """Baixa áudio já decodificado via Evolution API."""
     mime_type = msg_data.get("message", {}).get("audioMessage", {}).get("mimetype", "audio/ogg")
-
     url = f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 url,
-                json={
-                    "message": {
-                        "key": msg_data.get("key", {}),
-                        "message": msg_data.get("message", {})
-                    }
-                },
+                json={"message": {"key": msg_data.get("key", {}), "message": msg_data.get("message", {})}},
                 headers={"apikey": settings.EVOLUTION_API_KEY}
             )
-            print(f"📥 Evolution getBase64: {resp.status_code} | {resp.text[:300]}")
+            print(f"📥 Evolution getBase64: {resp.status_code}")
             if resp.status_code in [200, 201]:
                 data = resp.json()
                 b64 = data.get("base64") or data.get("data")
@@ -46,24 +41,20 @@ async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
                     return base64.b64decode(b64), mime_type
     except Exception as e:
         print(f"❌ Erro download áudio Evolution: {e}")
-
     return None, mime_type
 
 
-async def handle_audio_message(msg_data: dict, remote_jid: str) -> dict:
+async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: dict) -> dict:
     numero = remote_jid.split("@")[0]
-
     audio_bytes, mime_type = await _baixar_audio_evolution(msg_data)
 
     if not audio_bytes:
-        return {
-            "type": "text",
-            "content": "❌ Não consegui baixar o áudio. Tente enviar novamente ou descreva o gasto em texto."
-        }
+        return {"type": "text", "content": "❌ Não consegui baixar o áudio. Tente enviar novamente ou descreva o gasto em texto."}
 
     try:
         dados = await processar_gasto_audio(audio_bytes, mime_type)
-        await salvar_gasto(numero, dados, fonte="audio")
+        gasto_id = await salvar_gasto(numero, dados, fonte="audio")
+        ultimo_gasto[numero] = gasto_id
 
         alerta = await verificar_limite_pos_gasto(numero) or ""
 
@@ -78,10 +69,6 @@ async def handle_audio_message(msg_data: dict, remote_jid: str) -> dict:
             alerta=alerta
         )
         return {"type": "text", "content": card}
-
     except Exception as e:
         print(f"❌ Erro ao processar áudio: {e}")
-        return {
-            "type": "text",
-            "content": "😅 Não entendi o áudio. Tente falar mais claramente ou envie em texto.\nEx: _'gastei 45 reais no iFood com cartão'_"
-        }
+        return {"type": "text", "content": "😅 Não entendi o áudio. Tente falar mais claramente ou envie em texto.\nEx: _'gastei 45 reais no iFood com cartão'_"}
