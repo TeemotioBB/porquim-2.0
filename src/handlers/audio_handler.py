@@ -37,7 +37,7 @@ async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
                 headers={"apikey": settings.EVOLUTION_API_KEY}
             )
             print(f"📥 Evolution getBase64: {resp.status_code} | {resp.text[:300]}")
-            if resp.status_code == 200:
+            if resp.status_code in [200, 201]:
                 data = resp.json()
                 b64 = data.get("base64") or data.get("data")
                 if b64:
