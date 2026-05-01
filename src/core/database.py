@@ -2,6 +2,20 @@ import asyncpg
 import os
 from src.core.config import settings
 
+from datetime import date as _date
+
+def _parse_date(s: str) -> _date:
+    """Aceita yyyy-mm-dd ou dd-mm-yyyy."""
+    s = s.strip()
+    try:
+        return _date.fromisoformat(s)  # yyyy-mm-dd
+    except ValueError:
+        # Tenta dd-mm-yyyy
+        parts = s.split("-")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            return _date(int(parts[2]), int(parts[1]), int(parts[0]))
+        raise
+
 _pool = None
 
 async def get_pool():
