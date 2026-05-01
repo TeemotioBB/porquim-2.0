@@ -61,8 +61,8 @@ async def evolution_webhook(request: Request, any: str = None):
     msg_data = data["data"]
 
 # Evolution às vezes manda data como lista (ex: contacts-update)
-if isinstance(msg_data, list):
-    return {"status": "ok"}
+    if isinstance(msg_data, list):
+        return {"status": "ok"}
 
     # Ignora mensagens do próprio bot
     if msg_data.get("key", {}).get("fromMe", False):
