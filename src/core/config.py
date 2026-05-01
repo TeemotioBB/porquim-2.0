@@ -14,7 +14,7 @@ class Settings:
     DATABASE_URL: str = os.environ["DATABASE_URL"]
 
     # OpenAI Whisper para transcrição de áudio
-    OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
+    OPENAI_API_KEY: str = os.environ["OPENAI_API_KEY"]
 
     PORT: int = int(os.environ.get("PORT", 8080))
 
