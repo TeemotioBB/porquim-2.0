@@ -1,5 +1,5 @@
-import httpx
 import base64
+import httpx
 from src.services.ia_service import processar_comprovante_foto
 from src.services.report_service import verificar_limite_pos_gasto
 from src.core.database import salvar_gasto
@@ -17,38 +17,42 @@ CARD_FOTO = """✅ *Comprovante Lido!* 📷
 _Salvo com sucesso!_ 🎉"""
 
 
-async def handle_image_message(message: dict) -> dict:
-    """
-    message deve conter:
-      - image.url ou image.base64
-      - image.mimetype
-      - key.remoteJid
-    """
-    numero = message["key"]["remoteJid"].split("@")[0]
-    image_info = message.get("image", {})
+async def _baixar_imagem_evolution(msg_data: dict) -> tuple[bytes | None, str]:
+    """Baixa imagem já decodificada via Evolution API."""
+    mime_type = msg_data.get("message", {}).get("imageMessage", {}).get("mimetype", "image/jpeg")
 
-    image_bytes: bytes | None = None
-    mime_type = image_info.get("mimetype", "image/jpeg")
+    url = f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                url,
+                json={
+                    "message": {
+                        "key": msg_data.get("key", {}),
+                        "message": msg_data.get("message", {})
+                    }
+                },
+                headers={"apikey": settings.EVOLUTION_API_KEY}
+            )
+            print(f"📥 Evolution getBase64 imagem: {resp.status_code}")
+            if resp.status_code == 200:
+                data = resp.json()
+                b64 = data.get("base64") or data.get("data")
+                if b64:
+                    # Remove prefixo data:image/jpeg;base64, se existir
+                    if "," in b64:
+                        b64 = b64.split(",", 1)[1]
+                    return base64.b64decode(b64), mime_type
+    except Exception as e:
+        print(f"❌ Erro download imagem Evolution: {e}")
 
-    # Baixa via URL (Evolution)
-    url = image_info.get("url") or image_info.get("mediaUrl")
-    if url:
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
-                    url,
-                    headers={"apikey": settings.EVOLUTION_API_KEY}
-                )
-                if resp.status_code == 200:
-                    image_bytes = resp.content
-        except Exception as e:
-            print(f"❌ Erro ao baixar imagem: {e}")
+    return None, mime_type
 
-    # Fallback: base64 direto
-    if not image_bytes:
-        b64 = image_info.get("base64") or image_info.get("data")
-        if b64:
-            image_bytes = base64.b64decode(b64)
+
+async def handle_image_message(msg_data: dict, remote_jid: str) -> dict:
+    numero = remote_jid.split("@")[0]
+
+    image_bytes, mime_type = await _baixar_imagem_evolution(msg_data)
 
     if not image_bytes:
         return {
