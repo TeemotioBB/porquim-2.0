@@ -20,18 +20,23 @@ def _barra_progresso(pct: float, tamanho: int = 10) -> str:
     return "█" * cheios + "░" * (tamanho - cheios)
 
 
-async def gerar_resumo(usuario: str) -> str:
+async def gerar_resumo(usuario: str, ano: int = None, mes: int = None) -> str:
     hoje = date.today()
-    ano, mes = hoje.year, hoje.month
+    ano = ano or hoje.year
+    mes = mes or hoje.month
+
     gastos = await buscar_gastos_mes(usuario, ano, mes)
     total = await total_gasto_mes(usuario, ano, mes)
-    limite = await buscar_limite(usuario)
+
+    # Limite só aparece no mês atual
+    limite = await buscar_limite(usuario) if (ano == hoje.year and mes == hoje.month) else None
+
+    periodo = f"{MESES_PT[mes]} {ano}"
 
     if not gastos:
         return (
-            f"📊 *Resumo de {MESES_PT[mes]}*\n\n"
-            "Nenhum gasto registrado ainda neste mês.\n"
-            "Manda uma mensagem como: _'iFood 45 cartão'_ para começar! 🚀"
+            f"📊 *Resumo de {periodo}*\n\n"
+            f"Nenhum gasto registrado em {periodo}. 🙌"
         )
 
     # Agrupa por categoria
@@ -47,7 +52,7 @@ async def gerar_resumo(usuario: str) -> str:
         pct = (val / total * 100) if total > 0 else 0
         linhas_cat.append(f"  {emoji} {cat}: R$ {val:.2f} ({pct:.0f}%)")
 
-    # Bloco de limite
+    # Bloco de limite (só mês atual)
     bloco_limite = ""
     if limite:
         pct_limite = (total / limite) * 100
@@ -55,14 +60,14 @@ async def gerar_resumo(usuario: str) -> str:
         restante = max(0, limite - total)
         status = "🟢" if pct_limite < 75 else "🟡" if pct_limite < 100 else "🔴"
         bloco_limite = (
-            f"\n💳 *Limite Mensal*\n"
+            f"\n\n💳 *Limite Mensal*\n"
             f"  {barra} {pct_limite:.0f}%\n"
             f"  {status} R$ {total:.2f} / R$ {limite:.2f}\n"
             f"  💡 Restam R$ {restante:.2f}"
         )
 
     resumo = (
-        f"📊 *Resumo de {MESES_PT[mes]} {ano}*\n\n"
+        f"📊 *Resumo de {periodo}*\n\n"
         f"💰 *Total gasto:* R$ {total:.2f}\n"
         f"🧾 *Transações:* {len(gastos)}\n\n"
         f"*Por categoria:*\n"
@@ -71,7 +76,6 @@ async def gerar_resumo(usuario: str) -> str:
         + f"\n\n_Últimos registros:_"
     )
 
-    # Últimos 3 gastos
     for g in gastos[:3]:
         emoji = EMOJI_CATEGORIA.get(g["categoria"], "📦")
         resumo += f"\n  {emoji} {g['descricao']} · R$ {float(g['valor']):.2f}"
@@ -98,7 +102,6 @@ async def definir_limite(usuario: str, valor: float) -> str:
 
 
 async def verificar_limite_pos_gasto(usuario: str) -> str | None:
-    """Retorna aviso se o gasto atual ultrapassar 80% ou 100% do limite."""
     hoje = date.today()
     limite = await buscar_limite(usuario)
     if not limite:
