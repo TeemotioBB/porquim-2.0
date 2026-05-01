@@ -53,7 +53,7 @@ async def salvar_gasto(usuario: str, dados: dict, fonte: str = "texto") -> int:
             float(dados["valor"]),
             dados["categoria"],
             dados["forma_pagamento"],
-            __import__('datetime').date.fromisoformat(dados["data"]) if isinstance(dados["data"], str) else dados["data"],
+            _parse_date(dados["data"]) if isinstance(dados["data"], str) else dados["data"],
             dados.get("hashtag", ""),
             fonte
         )
