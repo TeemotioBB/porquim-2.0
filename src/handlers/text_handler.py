@@ -4,8 +4,16 @@ from src.services.ia_service import processar_gasto_texto
 from src.services.report_service import gerar_resumo, definir_limite, verificar_limite_pos_gasto
 from src.core.database import salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id
 from src.services.ia_service import processar_gasto_texto as _extrair
+from src.core.config import settings
+from openai import AsyncOpenAI
 
-AJUDA = """👋 *Olá! Sou o Porquim* 🐷
+# ─── Cliente Grok (mesmo padrão do ia_service) ───────────────────────────────
+_grok = AsyncOpenAI(
+    api_key=settings.XAI_API_KEY,
+    base_url="https://api.x.ai/v1",
+)
+
+AJUDA = """👋 *Olá! Sou o MAYCON* 🤖
 _Seu assistente financeiro no WhatsApp!_
 
 ━━━━━━━━━━━━━━━━━━
@@ -21,7 +29,7 @@ Manda qualquer gasto no texto:
 _"Gastei 50 reais no mercado com cartão"_
 
 📷 *Foto:* Manda foto do comprovante!
-_O Porquim lê e registra automático_
+_O MAYCON lê e registra automático_
 
 ━━━━━━━━━━━━━━━━━━
 📊 *VER RELATÓRIOS*
@@ -78,6 +86,79 @@ _ultimo_gasto: dict[str, int] = {}       # usuario -> gasto_id
 _resumo_gastos: dict[str, list] = {}     # usuario -> lista de gastos do último resumo
 
 
+# ─── Detecção de intenção ─────────────────────────────────────────────────────
+
+async def _detectar_intencao(texto: str) -> str:
+    """
+    Retorna: GASTO | OUTRO
+    Primeira camada: heurística rápida (sem custo de API).
+    Segunda camada: Grok para casos ambíguos.
+    """
+    t = texto.strip().lower()
+
+    # ── Heurística rápida: textos claramente não-gasto ────────────────────────
+    # Sem nenhum dígito na mensagem → impossível ser um gasto com valor
+    if not re.search(r"\d", t):
+        return "OUTRO"
+
+    # Apenas emojis, risadas, interjeições curtas
+    if re.fullmatch(r"[kkkhahehe😂🤣👍🙏❤️\s!?.]+", t):
+        return "OUTRO"
+
+    # Frases claramente conversacionais
+    padroes_outro = [
+        r"^(oi|olá|ola|ei|eai|e aí|opa|hey)\b",
+        r"^(tudo bem|tudo bom|como vai|tá bom|ok|okay|certo|entendi|show)\b",
+        r"^(obrigad|valeu|vlw|tmj|flw|abraç)\b",
+        r"^(sim|não|nao|talvez|claro)\b",
+        r"^(bom dia|boa tarde|boa noite)\b",
+    ]
+    for p in padroes_outro:
+        if re.search(p, t):
+            return "OUTRO"
+
+    # Parece gasto: tem número E palavra que sugere valor/estabelecimento
+    # Ex: "uber 25", "mc donalds 45", "gasolina 90", "aluguel 1500"
+    if re.search(r"\b\d+([.,]\d+)?\b", t) and len(t.split()) >= 2:
+        # Heurística positiva: provavelmente um gasto, passa pro Grok confirmar
+        pass
+    elif re.search(r"\b\d+([.,]\d+)?\b", t) and len(t.split()) == 1:
+        # Só um número solto → não é gasto
+        return "OUTRO"
+
+    # ── Segunda camada: Grok para casos ambíguos ──────────────────────────────
+    try:
+        resp = await _grok.chat.completions.create(
+            model="grok-3-mini",
+            max_tokens=5,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Você classifica mensagens de WhatsApp de um app de controle financeiro. "
+                        "Responda APENAS com uma palavra: GASTO ou OUTRO.\n\n"
+                        "GASTO = mensagem que registra uma despesa financeira. "
+                        "Exemplos: 'uber 25', 'mc donalds 45 cartão', 'gasolina 90 pix', "
+                        "'farmácia 38,50', 'aluguel 1200', 'gastei 50 no mercado'.\n\n"
+                        "OUTRO = qualquer outra coisa: saudações, perguntas, piadas, "
+                        "elogios, números aleatórios sem contexto de gasto, etc. "
+                        "Exemplos: 'oi', 'kkk', 'que legal!', 'valeu', '123', 'tá bom'."
+                    ),
+                },
+                {"role": "user", "content": texto},
+            ],
+        )
+        resultado = resp.choices[0].message.content.strip().upper()
+        return resultado if resultado in ("GASTO", "OUTRO") else "OUTRO"
+    except Exception as e:
+        print(f"⚠️ Erro na detecção de intenção: {e}")
+        # Em caso de falha da API, tenta registrar (comportamento original)
+        return "GASTO"
+
+
+# ─── Parser de mês ───────────────────────────────────────────────────────────
+
 def _parse_mes_resumo(texto: str):
     hoje = date.today()
     resto = re.sub(r"^resumo\s*", "", texto.lower().strip()).strip()
@@ -103,23 +184,25 @@ def _parse_mes_resumo(texto: str):
     return hoje.year, hoje.month
 
 
+# ─── Handler principal ────────────────────────────────────────────────────────
+
 async def handle_text_message(message: dict) -> dict:
     texto = message["text"]["body"].strip()
     numero = message["key"]["remoteJid"].split("@")[0]
     texto_lower = texto.lower()
 
-    # ── Ajuda ─────────────────────────────────────────────
+    # ── Ajuda ─────────────────────────────────────────────────────────────────
     if texto_lower in ["oi", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
         return {"type": "text", "content": AJUDA}
 
-    # ── Resumo ─────────────────────────────────────────────
+    # ── Resumo ────────────────────────────────────────────────────────────────
     if texto_lower.startswith("resumo") or texto_lower in ["relatorio", "relatório", "gastos", "ver gastos"]:
         ano, mes = _parse_mes_resumo(texto_lower)
         conteudo, gastos = await gerar_resumo(numero, ano=ano, mes=mes)
         _resumo_gastos[numero] = gastos
         return {"type": "text", "content": conteudo}
 
-    # ── Remover pelo número do resumo: "remover 2" ─────────
+    # ── Remover pelo número do resumo: "remover 2" ────────────────────────────
     match_rem_num = re.match(r"^remover\s+(\d+)$", texto_lower)
     if match_rem_num:
         idx = int(match_rem_num.group(1)) - 1
@@ -135,7 +218,7 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Gasto removido!*\n\n_{g['descricao']} · R$ {float(g['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
-    # ── Remover último gasto: "remover" ───────────────────
+    # ── Remover último gasto: "remover" ───────────────────────────────────────
     if texto_lower == "remover":
         gasto_id = _ultimo_gasto.get(numero)
         if not gasto_id:
@@ -149,7 +232,7 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Gasto removido!*\n\n_{g['descricao']} · R$ {float(g['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
-    # ── Editar pelo número do resumo: "editar 2 Uber 50 cartão" ──
+    # ── Editar pelo número do resumo: "editar 2 Uber 50 cartão" ──────────────
     match_edit_num = re.match(r"^editar\s+(\d+)\s+(.+)$", texto_lower)
     if match_edit_num:
         idx = int(match_edit_num.group(1)) - 1
@@ -168,7 +251,7 @@ async def handle_text_message(message: dict) -> dict:
             print(f"❌ Erro ao editar: {e}")
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar 2 Uber 50 cartão*"}
 
-    # ── Editar último gasto: "editar" ou "editar Uber 50 cartão" ──
+    # ── Editar último gasto: "editar" ou "editar Uber 50 cartão" ─────────────
     match_edit = re.match(r"^editar\s+(.+)$", texto_lower)
     if match_edit or texto_lower == "editar":
         gasto_id = _ultimo_gasto.get(numero)
@@ -187,7 +270,7 @@ async def handle_text_message(message: dict) -> dict:
             print(f"❌ Erro ao editar: {e}")
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar Uber 55 pix*"}
 
-    # ── Limite ─────────────────────────────────────────────
+    # ── Limite ────────────────────────────────────────────────────────────────
     match_lim = re.match(r"^limite\s+([\d.,]+)", texto_lower)
     if match_lim:
         try:
@@ -196,7 +279,20 @@ async def handle_text_message(message: dict) -> dict:
         except ValueError:
             return {"type": "text", "content": "❌ Valor inválido. Ex: _limite 2000_"}
 
-    # ── Registrar gasto ────────────────────────────────────
+    # ── Detecção de intenção → Registrar gasto ────────────────────────────────
+    intencao = await _detectar_intencao(texto)
+
+    if intencao != "GASTO":
+        return {
+            "type": "text",
+            "content": (
+                "👋 Oi! Não entendi bem.\n\n"
+                "Para registrar um gasto, tente:\n"
+                "_'iFood 45 cartão'_ ou _'Uber 23 pix'_\n\n"
+                "Digite *ajuda* para ver todos os comandos. 😊"
+            )
+        }
+
     try:
         dados = await processar_gasto_texto(texto)
         gasto_id = await salvar_gasto(numero, dados, fonte="texto")
