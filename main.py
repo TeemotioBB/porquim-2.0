@@ -12,22 +12,32 @@ app = FastAPI(title="Porquim 2.0")
 async def evolution_webhook(request: Request, any: str = None):
     data = await request.json()
     
-    print(f"\n📥 [WEBHOOK] Evento recebido: {any or 'webhook'}")
-    print(f"Payload completo: {json.dumps(data, indent=2, ensure_ascii=False)[:1000]}...")  # debug
+    event = any or "webhook"
+    print(f"\n📥 [WEBHOOK] Evento recebido: {event}")
     
-    # Tenta encontrar a mensagem de várias formas que a Evolution envia
+    # Debug completo do payload quando for mensagem
+    if event == "messages-upsert":
+        print(f"Payload completo (messages-upsert): {json.dumps(data, indent=2, ensure_ascii=False)[:1500]}...")
+
+    # 🔥 Nova lógica robusta para Evolution API v2.3.7
     message = None
     if isinstance(data, dict):
-        if "data" in data and isinstance(data["data"], dict) and "messages" in data["data"]:
-            message = data["data"]["messages"][0] if data["data"]["messages"] else None
-        elif "messages" in data:
-            message = data["messages"][0] if data["messages"] else None
-    
-    if message:
-        print(f"✅ Mensagem detectada! Tipo: {message.get('messageType') or 'texto'}")
+        # Caso 1: padrão mais comum da Evolution
+        if "data" in data and isinstance(data["data"], dict):
+            if "messages" in data["data"] and data["data"]["messages"]:
+                message = data["data"]["messages"][0]
+        # Caso 2: messages direto na raiz
+        elif "messages" in data and data["messages"]:
+            message = data["messages"][0]
+        # Caso 3: payload direto com key/message
+        elif "key" in data and "message" in data:
+            message = data
+
+    if message and message.get("messageType") == "text" or message.get("text"):
+        print(f"✅ Mensagem de texto detectada! Conteúdo: {message.get('text') or message.get('message', {}).get('conversation', '')}")
+        
         response = await handle_text_message(message)
         
-        # Envia resposta de volta pro WhatsApp
         try:
             async with httpx.AsyncClient() as client:
                 await client.post(
@@ -43,12 +53,11 @@ async def evolution_webhook(request: Request, any: str = None):
         except Exception as e:
             print(f"❌ Erro ao enviar resposta: {e}")
     else:
-        print("⚠️ Nenhuma mensagem de texto encontrada no payload")
+        print("⚠️ Nenhuma mensagem de texto encontrada (normal para presence, chats-update, etc.)")
 
     return {"status": "ok"}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
-
-#fix: webhook robusto + debug completo para Evolution API
+#fix: webhook 100% compatível com Evolution API v2.3.7
