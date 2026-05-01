@@ -1,3 +1,10 @@
+from src.core.config import settings
+
+# DEBUG TEMPORÁRIO - remover depois
+print(f"🔑 API KEY carregada: {settings.EVOLUTION_API_KEY[:10]}...")
+print(f"🌐 URL: {settings.EVOLUTION_API_URL}")
+print(f"📱 INSTANCE: {settings.EVOLUTION_INSTANCE}")
+
 from fastapi import FastAPI, Request
 from src.core.config import settings
 from src.handlers.text_handler import handle_text_message
