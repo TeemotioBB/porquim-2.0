@@ -8,7 +8,6 @@ from src.core.database import get_pool
 from src.handlers.text_handler import handle_text_message
 from src.handlers.audio_handler import handle_audio_message
 from src.handlers.image_handler import handle_image_message
-from src.handlers.text_handler import handle_text_message, _ultimo_gasto
 
 
 @asynccontextmanager
@@ -93,21 +92,19 @@ async def evolution_webhook(request: Request, any: str = None):
     # ── 2. Áudio ────────────────────────────────────────────
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
-    from src.handlers.text_handler import _ultimo_gasto
-    response = await handle_audio_message(
-        msg_data=msg_data,
-        remote_jid=remote_jid,
-        ultimo_gasto=_ultimo_gasto
-)
+        response = await handle_audio_message(
+            msg_data=msg_data,
+            remote_jid=remote_jid
+        )
+
     # ── 3. Imagem / Comprovante ─────────────────────────────
     elif "imageMessage" in msg:
         caption = msg["imageMessage"].get("caption", "").strip()
         print(f"📷 Imagem recebida (caption: '{caption}')")
         response = await handle_image_message(
             msg_data=msg_data,
-            remote_jid=remote_jid,
-            ultimo_gasto=_ultimo_gasto
-)
+            remote_jid=remote_jid
+        )
 
     else:
         print(f"⚠️ Tipo não suportado: {list(msg.keys())}")
