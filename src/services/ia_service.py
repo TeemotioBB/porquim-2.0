@@ -21,7 +21,7 @@ async def processar_gasto_texto(texto: str, numero_usuario: str):
     """
 
     response = await client.chat.completions.create(
-        model="grok-4-1-fast-reasoning",   # ← modelo que você pediu
+        model="grok-4-1-fast-non-reasoning",   # ← modelo que você pediu
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3
     )
