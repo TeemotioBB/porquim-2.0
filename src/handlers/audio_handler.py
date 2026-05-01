@@ -36,12 +36,11 @@ async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
                 },
                 headers={"apikey": settings.EVOLUTION_API_KEY}
             )
-            print(f"📥 Evolution getBase64: {resp.status_code}")
+            print(f"📥 Evolution getBase64: {resp.status_code} | {resp.text[:300]}")
             if resp.status_code == 200:
                 data = resp.json()
                 b64 = data.get("base64") or data.get("data")
                 if b64:
-                    # Remove prefixo data:audio/ogg;base64, se existir
                     if "," in b64:
                         b64 = b64.split(",", 1)[1]
                     return base64.b64decode(b64), mime_type
