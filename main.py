@@ -8,6 +8,7 @@ from src.core.database import get_pool
 from src.handlers.text_handler import handle_text_message
 from src.handlers.audio_handler import handle_audio_message
 from src.handlers.image_handler import handle_image_message
+from src.handlers.text_handler import handle_text_message, _ultimo_gasto
 
 
 @asynccontextmanager
@@ -104,8 +105,9 @@ async def evolution_webhook(request: Request, any: str = None):
         print(f"📷 Imagem recebida (caption: '{caption}')")
         response = await handle_image_message(
             msg_data=msg_data,
-            remote_jid=remote_jid
-        )
+            remote_jid=remote_jid,
+            ultimo_gasto=_ultimo_gasto
+)
 
     else:
         print(f"⚠️ Tipo não suportado: {list(msg.keys())}")
