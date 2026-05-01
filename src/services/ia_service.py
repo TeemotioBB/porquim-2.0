@@ -25,7 +25,7 @@ Analise a mensagem e extraia em JSON:
 - descricao: descrição limpa do gasto
 - categoria: uma de ({categorias})
 - forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato YYYY-MM-DD. Hoje é {hoje}. Se disser "ontem" use o dia anterior, "semana passada" use 7 dias atrás, etc. Se não mencionar data use {hoje}.
+- data: data no formato DD-MM-YYYY. Hoje é {hoje}. Se disser "ontem" use o dia anterior, "semana passada" use 7 dias atrás, etc. Se não mencionar data use {hoje}.
 
 Mensagem: {texto}
 Responda APENAS com JSON válido, sem markdown.
@@ -97,7 +97,7 @@ Analise esta imagem de comprovante/nota fiscal e extraia em JSON:
 - descricao: descrição do estabelecimento ou produto principal
 - categoria: uma de ({CATEGORIAS})
 - forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato YYYY-DD-MM (use {HOJE} se não visível)
+- data: data no formato DD-MM-YYYY (use {HOJE} se não visível)
 
 Responda APENAS com JSON válido, sem markdown.
 """
