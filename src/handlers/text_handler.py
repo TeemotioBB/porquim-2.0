@@ -283,15 +283,7 @@ async def handle_text_message(message: dict) -> dict:
     intencao = await _detectar_intencao(texto)
 
     if intencao != "GASTO":
-        return {
-            "type": "text",
-            "content": (
-                "👋 Oi! Não entendi bem.\n\n"
-                "Para registrar um gasto, tente:\n"
-                "_'iFood 45 cartão'_ ou _'Uber 23 pix'_\n\n"
-                "Digite *ajuda* para ver todos os comandos. 😊"
-            )
-        }
+        return {"type": "text", "content": AJUDA}
 
     try:
         dados = await processar_gasto_texto(texto)
