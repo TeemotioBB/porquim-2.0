@@ -1,6 +1,4 @@
 from src.core.config import settings
-
-import time
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
@@ -17,6 +15,7 @@ async def lifespan(app: FastAPI):
     print("🐘 Conectando ao PostgreSQL...")
     await get_pool()
     print("✅ Banco conectado e tabelas criadas!")
+    app.state.processed_ids = set()
     yield
     print("👋 Encerrando Porquim...")
 
@@ -57,15 +56,21 @@ async def evolution_webhook(request: Request, any: str = None):
 
     msg_data = data["data"]
 
-    # Evolution às vezes manda data como lista (ex: contacts-update)
     if isinstance(msg_data, list):
         return {"status": "ok"}
 
-    # Ignora mensagens do próprio bot
     if msg_data.get("key", {}).get("fromMe", False):
-        print("⚠️ Mensagem própria, ignorando.")
         return {"status": "ok"}
 
+    # Ignora duplicatas pelo ID da mensagem
+    msg_id = msg_data.get("key", {}).get("id", "")
+    if msg_id and msg_id in app.state.processed_ids:
+        print(f"⚠️ Duplicata ignorada: {msg_id}")
+        return {"status": "ok"}
+    if msg_id:
+        app.state.processed_ids.add(msg_id)
+        if len(app.state.processed_ids) > 200:
+            app.state.processed_ids.pop()
 
     remote_jid = msg_data.get("key", {}).get("remoteJid")
     msg = msg_data.get("message", {})
