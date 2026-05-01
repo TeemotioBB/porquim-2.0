@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 # ─── Cliente Grok (mesmo padrão do ia_service) ───────────────────────────────
 _grok = AsyncOpenAI(
-    api_key=settings.XAI_API_KEY,
+    api_key=settings.GROK_API_KEY,
     base_url="https://api.x.ai/v1",
 )
 
