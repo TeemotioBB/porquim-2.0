@@ -92,11 +92,12 @@ async def evolution_webhook(request: Request, any: str = None):
     # ── 2. Áudio ────────────────────────────────────────────
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
-        response = await handle_audio_message(
-            msg_data=msg_data,
-            remote_jid=remote_jid
-        )
-
+    from src.handlers.text_handler import _ultimo_gasto
+    response = await handle_audio_message(
+        msg_data=msg_data,
+        remote_jid=remote_jid,
+        ultimo_gasto=_ultimo_gasto
+)
     # ── 3. Imagem / Comprovante ─────────────────────────────
     elif "imageMessage" in msg:
         caption = msg["imageMessage"].get("caption", "").strip()
