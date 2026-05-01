@@ -66,11 +66,6 @@ async def evolution_webhook(request: Request, any: str = None):
         print("⚠️ Mensagem própria, ignorando.")
         return {"status": "ok"}
 
-    # Ignora mensagens antigas (> 30s)
-    timestamp = msg_data.get("messageTimestamp", 0)
-    if int(time.time()) - timestamp > 30:
-        print(f"⚠️ Mensagem antiga, ignorando.")
-        return {"status": "ok"}
 
     remote_jid = msg_data.get("key", {}).get("remoteJid")
     msg = msg_data.get("message", {})
