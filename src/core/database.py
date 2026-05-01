@@ -1,20 +1,6 @@
 import asyncpg
-import os
-from src.core.config import settings
-
 from datetime import date as _date
-
-def _parse_date(s: str) -> _date:
-    """Aceita yyyy-mm-dd ou dd-mm-yyyy."""
-    s = s.strip()
-    try:
-        return _date.fromisoformat(s)  # yyyy-mm-dd
-    except ValueError:
-        # Tenta dd-mm-yyyy
-        parts = s.split("-")
-        if len(parts) == 3 and len(parts[2]) == 4:
-            return _date(int(parts[2]), int(parts[1]), int(parts[0]))
-        raise
+from src.core.config import settings
 
 _pool = None
 
@@ -38,7 +24,7 @@ async def _create_tables():
                 forma_pagamento VARCHAR(30) NOT NULL,
                 data DATE NOT NULL,
                 hashtag VARCHAR(20),
-                fonte VARCHAR(20) DEFAULT 'texto',  -- texto | audio | foto
+                fonte VARCHAR(20) DEFAULT 'texto',
                 criado_em TIMESTAMP DEFAULT NOW()
             );
 
@@ -51,6 +37,17 @@ async def _create_tables():
             CREATE INDEX IF NOT EXISTS idx_gastos_usuario ON gastos(usuario);
             CREATE INDEX IF NOT EXISTS idx_gastos_data ON gastos(data);
         """)
+
+def _parse_date(s: str) -> _date:
+    """Aceita yyyy-mm-dd ou dd-mm-yyyy."""
+    s = s.strip()
+    try:
+        return _date.fromisoformat(s)
+    except ValueError:
+        parts = s.split("-")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            return _date(int(parts[2]), int(parts[1]), int(parts[0]))
+        raise
 
 # ── Gastos ──────────────────────────────────────────────
 
@@ -72,6 +69,35 @@ async def salvar_gasto(usuario: str, dados: dict, fonte: str = "texto") -> int:
             fonte
         )
         return row["id"]
+
+async def buscar_gasto_por_id(gasto_id: int, usuario: str) -> dict | None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM gastos WHERE id=$1 AND usuario=$2", gasto_id, usuario
+        )
+        return dict(row) if row else None
+
+async def deletar_gasto(gasto_id: int, usuario: str) -> bool:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM gastos WHERE id=$1 AND usuario=$2", gasto_id, usuario
+        )
+        return result == "DELETE 1"
+
+async def atualizar_gasto(gasto_id: int, usuario: str, dados: dict) -> bool:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE gastos SET
+                descricao=$3, valor=$4, categoria=$5, forma_pagamento=$6
+            WHERE id=$1 AND usuario=$2
+        """, gasto_id, usuario,
+            dados["descricao"], float(dados["valor"]),
+            dados["categoria"], dados["forma_pagamento"]
+        )
+        return result == "UPDATE 1"
 
 async def buscar_gastos_mes(usuario: str, ano: int, mes: int) -> list:
     pool = await get_pool()
