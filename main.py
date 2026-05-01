@@ -1,6 +1,5 @@
 from src.core.config import settings
 
-import asyncio
 import time
 import httpx
 import uvicorn
@@ -15,7 +14,6 @@ from src.handlers.image_handler import handle_image_message
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicializa o pool do banco na startup
     print("🐘 Conectando ao PostgreSQL...")
     await get_pool()
     print("✅ Banco conectado e tabelas criadas!")
@@ -27,7 +25,6 @@ app = FastAPI(title="Porquim 2.0 🐷", lifespan=lifespan)
 
 
 async def _enviar_resposta(remote_jid: str, texto: str):
-    """Envia resposta de volta via Evolution API."""
     url = f"{settings.EVOLUTION_API_URL}/message/sendText/{settings.EVOLUTION_INSTANCE}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -60,7 +57,7 @@ async def evolution_webhook(request: Request, any: str = None):
 
     msg_data = data["data"]
 
-# Evolution às vezes manda data como lista (ex: contacts-update)
+    # Evolution às vezes manda data como lista (ex: contacts-update)
     if isinstance(msg_data, list):
         return {"status": "ok"}
 
@@ -95,34 +92,22 @@ async def evolution_webhook(request: Request, any: str = None):
     # ── 2. Áudio ────────────────────────────────────────────
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
-        audio_msg = msg["audioMessage"]
-        response = await handle_audio_message({
-            "audio": {
-                "url": audio_msg.get("url"),
-                "mediaUrl": audio_msg.get("directPath"),
-                "mimetype": audio_msg.get("mimetype", "audio/ogg"),
-                "base64": msg_data.get("message", {}).get("base64")
-            },
-            "key": {"remoteJid": remote_jid}
-        })
+        response = await handle_audio_message(
+            msg_data=msg_data,
+            remote_jid=remote_jid
+        )
 
     # ── 3. Imagem / Comprovante ─────────────────────────────
     elif "imageMessage" in msg:
         caption = msg["imageMessage"].get("caption", "").strip()
         print(f"📷 Imagem recebida (caption: '{caption}')")
-        response = await handle_image_message({
-            "image": {
-                "url": msg["imageMessage"].get("url"),
-                "mediaUrl": msg["imageMessage"].get("directPath"),
-                "mimetype": msg["imageMessage"].get("mimetype", "image/jpeg"),
-                "base64": msg_data.get("message", {}).get("base64")
-            },
-            "key": {"remoteJid": remote_jid}
-        })
+        response = await handle_image_message(
+            msg_data=msg_data,
+            remote_jid=remote_jid
+        )
 
-    # ── 4. Tipo não reconhecido ─────────────────────────────
     else:
-        print(f"⚠️ Tipo de mensagem não suportado: {list(msg.keys())}")
+        print(f"⚠️ Tipo não suportado: {list(msg.keys())}")
         return {"status": "ok"}
 
     if response:
