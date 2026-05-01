@@ -41,7 +41,7 @@ async def processar_gasto_texto(texto: str) -> dict:
         categorias=CATEGORIAS, hoje=HOJE, texto=texto
     )
     resp = await grok.chat.completions.create(
-        model="grok-3-fast",
+        model="grok-4-1-fast-non-reasoning",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2
     )
