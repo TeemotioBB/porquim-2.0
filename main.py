@@ -62,7 +62,7 @@ async def evolution_webhook(request: Request, any: str = None):
     if msg_data.get("key", {}).get("fromMe", False):
         return {"status": "ok"}
 
-    # Ignora duplicatas pelo ID da mensagem
+    # Ignora duplicatas
     msg_id = msg_data.get("key", {}).get("id", "")
     if msg_id and msg_id in app.state.processed_ids:
         print(f"⚠️ Duplicata ignorada: {msg_id}")
@@ -80,7 +80,7 @@ async def evolution_webhook(request: Request, any: str = None):
 
     response = None
 
-    # ── 1. Texto simples ────────────────────────────────────
+    # Texto simples
     text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
     if text_body:
         print(f"✅ Texto: '{text_body}'")
@@ -89,15 +89,16 @@ async def evolution_webhook(request: Request, any: str = None):
             "key": {"remoteJid": remote_jid}
         })
 
-    # ── 2. Áudio ────────────────────────────────────────────
+    # Áudio
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
         response = await handle_audio_message(
             msg_data=msg_data,
-            remote_jid=remote_jid
+            remote_jid=remote_jid,
+            ultimo_gasto=None  # ← corrigido aqui
         )
 
-    # ── 3. Imagem / Comprovante ─────────────────────────────
+    # Imagem / Comprovante
     elif "imageMessage" in msg:
         caption = msg["imageMessage"].get("caption", "").strip()
         print(f"📷 Imagem recebida (caption: '{caption}')")
