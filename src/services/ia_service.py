@@ -97,7 +97,7 @@ Analise esta imagem de comprovante/nota fiscal e extraia em JSON:
 - descricao: descrição do estabelecimento ou produto principal
 - categoria: uma de ({CATEGORIAS})
 - forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato YYYY-MM-DD (use {HOJE} se não visível)
+- data: data no formato YYYY-DD-MM (use {HOJE} se não visível)
 
 Responda APENAS com JSON válido, sem markdown.
 """
