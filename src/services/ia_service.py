@@ -25,7 +25,7 @@ Analise a mensagem e extraia em JSON:
 - descricao: descrição limpa do gasto
 - categoria: uma de ({categorias})
 - forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato YYYY-MM-DD (use {hoje} se não mencionada)
+- data: data no formato YYYY-MM-DD. Hoje é {hoje}. Se disser "ontem" use o dia anterior, "semana passada" use 7 dias atrás, etc. Se não mencionar data use {hoje}.
 
 Mensagem: {texto}
 Responda APENAS com JSON válido, sem markdown.
