@@ -10,7 +10,7 @@ from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
 from openai import AsyncOpenAI
 
-# ─── Cliente Grok (mesmo padrão do ia_service) ───────────────────────────────
+# ─── Cliente Grok ─────────────────────────────────────────────────────────────
 _grok = AsyncOpenAI(
     api_key=settings.GROK_API_KEY,
     base_url="https://api.x.ai/v1",
@@ -37,10 +37,11 @@ _O MAYCON lê e registra automático_
 ━━━━━━━━━━━━━━━━━━
 💵 *REGISTRAR ENTRADA*
 ━━━━━━━━━━━━━━━━━━
-Use a palavra *recebi* ou *entrada*:
-- _"recebi salário 3000"_
-- _"entrada freelance 500"_
-- _"recebi reembolso 150"_
+Manda qualquer entrada de dinheiro:
+- _"salário 3000"_
+- _"recebi freelance 500"_
+- _"me pagaram 800"_
+- _"reembolso 150"_
 
 ━━━━━━━━━━━━━━━━━━
 📊 *VER RELATÓRIOS*
@@ -107,22 +108,17 @@ MESES_NOMES = {
 }
 
 # Memória em RAM: último gasto/entrada por usuário e lista do resumo
-_ultimo_gasto: dict[str, int] = {}       # usuario -> gasto_id
-_ultima_entrada: dict[str, int] = {}     # usuario -> entrada_id
-_resumo_gastos: dict[str, list] = {}     # usuario -> lista de gastos do último resumo
+_ultimo_gasto: dict[str, int] = {}
+_ultima_entrada: dict[str, int] = {}
+_resumo_gastos: dict[str, list] = {}
 
 
-# ─── Detecção de intenção ─────────────────────────────────────────────────────
+# ─── Detecção de intenção: GASTO ─────────────────────────────────────────────
 
 async def _detectar_intencao(texto: str) -> str:
-    """
-    Retorna: GASTO | OUTRO
-    Primeira camada: heurística rápida (sem custo de API).
-    Segunda camada: Grok para casos ambíguos.
-    """
+    """Retorna: GASTO | OUTRO"""
     t = texto.strip().lower()
 
-    # ── Heurística rápida: textos claramente não-gasto ────────────────────────
     if not re.search(r"\d", t):
         return "OUTRO"
 
@@ -145,10 +141,9 @@ async def _detectar_intencao(texto: str) -> str:
     elif re.search(r"\b\d+([.,]\d+)?\b", t) and len(t.split()) == 1:
         return "OUTRO"
 
-    # ── Segunda camada: Grok para casos ambíguos ──────────────────────────────
     try:
         resp = await _grok.chat.completions.create(
-            model="grok-3-mini",
+            model="grok-4-1-fast-non-reasoning",
             max_tokens=5,
             temperature=0,
             messages=[
@@ -173,6 +168,52 @@ async def _detectar_intencao(texto: str) -> str:
     except Exception as e:
         print(f"⚠️ Erro na detecção de intenção: {e}")
         return "GASTO"
+
+
+# ─── Detecção de intenção: ENTRADA ───────────────────────────────────────────
+
+async def _detectar_entrada(texto: str) -> bool:
+    """Retorna True se a mensagem parece uma entrada de dinheiro."""
+    t = texto.strip().lower()
+
+    # Sem número → não é entrada
+    if not re.search(r"\d", t):
+        return False
+
+    # Palavras-chave explícitas com número → entrada direta, sem chamar API
+    if re.search(
+        r"\b(recebi|receber|salário|salario|freelance|renda|ganho|ganhei|"
+        r"entrou|pagaram|me pagou|me pagaram|reembolso|investimento|dividendo)\b", t
+    ):
+        return True
+
+    # Casos ambíguos → Grok decide
+    try:
+        resp = await _grok.chat.completions.create(
+            model="grok-4-1-fast-non-reasoning",
+            max_tokens=5,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Você classifica mensagens de WhatsApp de um app financeiro. "
+                        "Responda APENAS: ENTRADA ou NAO.\n\n"
+                        "ENTRADA = mensagem que registra dinheiro que a pessoa RECEBEU. "
+                        "Exemplos: 'salário 3000', 'recebi 500', 'freelance 800', "
+                        "'me pagaram 200', 'entrou 1500 na conta', 'reembolso 90', "
+                        "'salario 200', 'bonus 400', '13º salário 1500'.\n\n"
+                        "NAO = qualquer outra coisa, incluindo gastos e saudações."
+                    ),
+                },
+                {"role": "user", "content": texto},
+            ],
+        )
+        resultado = resp.choices[0].message.content.strip().upper()
+        return resultado == "ENTRADA"
+    except Exception as e:
+        print(f"⚠️ Erro na detecção de entrada: {e}")
+        return False
 
 
 # ─── Parser de mês ───────────────────────────────────────────────────────────
@@ -311,8 +352,8 @@ async def handle_text_message(message: dict) -> dict:
         except ValueError:
             return {"type": "text", "content": "❌ Valor inválido. Ex: _limite 2000_"}
 
-    # ── Registrar entrada: "recebi ..." ou "entrada ..." ─────────────────────
-    if re.match(r"^(recebi|entrada)\b", texto_lower):
+    # ── Registrar entrada ─────────────────────────────────────────────────────
+    if await _detectar_entrada(texto):
         try:
             dados = await processar_entrada_texto(texto)
             entrada_id = await salvar_entrada(numero, dados, fonte="texto")
@@ -331,7 +372,7 @@ async def handle_text_message(message: dict) -> dict:
                 "type": "text",
                 "content": (
                     "😅 Não entendi essa entrada. Tente algo como:\n"
-                    "_'recebi salário 3000'_ ou _'entrada freelance 500'_"
+                    "_'salário 3000'_ ou _'recebi freelance 500'_"
                 )
             }
 
