@@ -31,6 +31,18 @@ Mensagem: {texto}
 Responda APENAS com JSON válido, sem markdown.
 """.strip()
 
+PROMPT_EXTRACAO_ENTRADA = """
+Você é o Porquim, assistente financeiro brasileiro.
+Analise a mensagem e extraia em JSON uma ENTRADA de dinheiro:
+- valor: número float (ex: 1500.00)
+- descricao: descrição limpa da entrada
+- categoria: uma de (Salário, Freelance, Investimento, Presente, Reembolso, Outros)
+- data: data no formato DD-MM-YYYY. Hoje é {hoje}. Se disser "ontem" use o dia anterior. Se não mencionar data use {hoje}.
+
+Mensagem: {texto}
+Responda APENAS com JSON válido, sem markdown.
+""".strip()
+
 def _gerar_hashtag(texto: str) -> str:
     return "#" + hashlib.md5(texto.encode()).hexdigest()[:6]
 
@@ -46,7 +58,21 @@ async def processar_gasto_texto(texto: str) -> dict:
         temperature=0.2
     )
     raw = resp.choices[0].message.content.strip()
-    # Remove possíveis blocos markdown caso o modelo insira
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    dados = json.loads(raw)
+    dados["hashtag"] = _gerar_hashtag(texto)
+    return dados
+
+
+async def processar_entrada_texto(texto: str) -> dict:
+    """Extrai dados de uma entrada de dinheiro a partir de texto."""
+    prompt = PROMPT_EXTRACAO_ENTRADA.format(hoje=HOJE, texto=texto)
+    resp = await grok.chat.completions.create(
+        model="grok-4-1-fast-non-reasoning",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
+    raw = resp.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
     dados = json.loads(raw)
     dados["hashtag"] = _gerar_hashtag(texto)
