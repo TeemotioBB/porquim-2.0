@@ -16,9 +16,7 @@ CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 📅 {data}
 🔖 {hashtag}{alerta}
 
-_Salvo com sucesso!_ 🎉
-_Para remover este gasto responda: *remover*_
-_Para editar responda: *editar*_"""
+_Salvo com sucesso!_ 🎉"""
 
 
 async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
@@ -68,7 +66,7 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             hashtag=dados["hashtag"],
             alerta=alerta
         )
-        return {"type": "text", "content": card}
+        return {"type": "text", "content": card, "gasto_id": gasto_id}
     except Exception as e:
         print(f"❌ Erro ao processar áudio: {e}")
         return {"type": "text", "content": "😅 Não entendi o áudio. Tente falar mais claramente ou envie em texto.\nEx: _'gastei 45 reais no iFood com cartão'_"}
