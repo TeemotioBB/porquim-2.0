@@ -2,6 +2,12 @@ import re
 from datetime import date, timedelta
 from src.services.ia_service import processar_gasto_texto, processar_entrada_texto
 from src.services.report_service import gerar_resumo, definir_limite, verificar_limite_pos_gasto
+from src.services.reminder_service import (
+    _detectar_lembrete_rapido,
+    processar_lembrete,
+    buscar_lembretes_pendentes,
+    cancelar_lembrete,
+)
 from src.core.database import (
     salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id,
     salvar_entrada, deletar_entrada, buscar_entrada_por_id
@@ -70,6 +76,15 @@ Para entradas:
 ━━━━━━━━━━━━━━━━━━
 - *limite 2000* → define seu limite
 _Te aviso quando passar de 80% e 100%!_
+
+━━━━━━━━━━━━━━━━━━
+🔔 *LEMBRETES*
+━━━━━━━━━━━━━━━━━━
+- _"Me lembre da reunião hoje às 14:00"_
+- _"Lembra de tomar o remédio amanhã às 8h"_
+- _"Me avisa da consulta sexta às 15:30"_
+- *meus lembretes* → ver agendados
+- *cancelar lembrete 3* → cancela pelo ID
 
 ━━━━━━━━━━━━━━━━━━
 - *ajuda* ou *menu* → mostra este guia
@@ -176,18 +191,15 @@ async def _detectar_entrada(texto: str) -> bool:
     """Retorna True se a mensagem parece uma entrada de dinheiro."""
     t = texto.strip().lower()
 
-    # Sem número → não é entrada
     if not re.search(r"\d", t):
         return False
 
-    # Palavras-chave explícitas com número → entrada direta, sem chamar API
     if re.search(
         r"\b(recebi|receber|salário|salario|freelance|renda|ganho|ganhei|"
         r"entrou|pagaram|me pagou|me pagaram|reembolso|investimento|dividendo)\b", t
     ):
         return True
 
-    # Casos ambíguos → Grok decide
     try:
         resp = await _grok.chat.completions.create(
             model="grok-4-1-fast-non-reasoning",
@@ -351,6 +363,34 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": await definir_limite(numero, valor)}
         except ValueError:
             return {"type": "text", "content": "❌ Valor inválido. Ex: _limite 2000_"}
+
+    # ── Lembrete: "meus lembretes" ou "ver lembretes" ────────────────────────
+    if re.search(r"\b(meus lembretes|ver lembretes|listar lembretes)\b", texto_lower):
+        lembretes = await buscar_lembretes_pendentes(numero)
+        if not lembretes:
+            return {"type": "text", "content": "📭 Você não tem lembretes agendados no momento.\n\nPara criar um:\n_'Me lembre da reunião hoje às 14:00'_"}
+        import pytz
+        TZ_BR = pytz.timezone("America/Sao_Paulo")
+        linhas = ["🔔 *Seus lembretes pendentes:*\n"]
+        for i, l in enumerate(lembretes, 1):
+            h = l["horario"].astimezone(TZ_BR)
+            linhas.append(f"{i}. 📌 {l['mensagem'].capitalize()}\n   ⏰ {h.strftime('%d/%m às %H:%M')} · ID #{l['id']}")
+        linhas.append("\n_Para cancelar: *cancelar lembrete [ID]*_")
+        return {"type": "text", "content": "\n".join(linhas)}
+
+    # ── Lembrete: cancelar "cancelar lembrete 3" ─────────────────────────────
+    match_cancel = re.match(r"^cancelar lembrete\s+(\d+)$", texto_lower)
+    if match_cancel:
+        lembrete_id = int(match_cancel.group(1))
+        ok = await cancelar_lembrete(lembrete_id, numero)
+        if ok:
+            return {"type": "text", "content": f"🗑️ *Lembrete #{lembrete_id} cancelado!*"}
+        return {"type": "text", "content": f"❌ Lembrete #{lembrete_id} não encontrado ou já foi enviado."}
+
+    # ── Lembrete: criar "me lembre...", "lembra de..." ────────────────────────
+    if _detectar_lembrete_rapido(texto):
+        resposta = await processar_lembrete(texto, numero)
+        return {"type": "text", "content": resposta}
 
     # ── Registrar entrada ─────────────────────────────────────────────────────
     if await _detectar_entrada(texto):
