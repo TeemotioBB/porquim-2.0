@@ -443,13 +443,15 @@ async def handle_text_message(message: dict) -> dict:
     if len(linhas) > 1:
         # Verifica se parece uma lista de gastos: pelo menos 2 linhas com número
         linhas_com_numero = [l for l in linhas if re.search(r"\d", l)]
+        # Linhas sem número servem de contexto (ex: "Meus gastos no mês de maio")
+        contexto_lote = " ".join(l for l in linhas if not re.search(r"\d", l))
         if len(linhas_com_numero) >= 2:
             cards = []
             falhas = []
             ids_registrados = []
             for linha in linhas_com_numero:
                 try:
-                    dados = await processar_gasto_texto(linha)
+                    dados = await processar_gasto_texto(linha, contexto=contexto_lote)
                     gasto_id = await salvar_gasto(numero, dados, fonte="texto")
                     ids_registrados.append(gasto_id)
                     alerta = await verificar_limite_pos_gasto(numero) or ""
