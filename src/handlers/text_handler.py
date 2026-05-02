@@ -369,8 +369,8 @@ async def handle_text_message(message: dict) -> dict:
         lembretes = await buscar_lembretes_pendentes(numero)
         if not lembretes:
             return {"type": "text", "content": "📭 Você não tem lembretes agendados no momento.\n\nPara criar um:\n_'Me lembre da reunião hoje às 14:00'_"}
-        import pytz
-        TZ_BR = pytz.timezone("America/Sao_Paulo")
+        from zoneinfo import ZoneInfo
+        TZ_BR = ZoneInfo("America/Sao_Paulo")
         linhas = ["🔔 *Seus lembretes pendentes:*\n"]
         for i, l in enumerate(lembretes, 1):
             h = l["horario"].astimezone(TZ_BR)
