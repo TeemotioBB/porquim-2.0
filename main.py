@@ -14,6 +14,9 @@ from src.core.database import (
     deletar_gasto,
     salvar_limite,
     buscar_limite,
+    buscar_entradas_mes,
+    total_entrada_mes,
+    deletar_entrada,
 )
 from src.handlers.text_handler import handle_text_message
 from src.handlers.audio_handler import handle_audio_message
@@ -27,8 +30,16 @@ EMOJI_CAT = {
     "Educação": "📚", "Outros": "📦",
 }
 
+EMOJI_ENTRADA_CAT = {
+    "Salário": "💼", "Freelance": "💻", "Investimento": "📈",
+    "Presente": "🎁", "Reembolso": "🔄", "Outros": "📦",
+}
+
 def emoji_para(cat: str) -> str:
     return EMOJI_CAT.get(cat, "📦")
+
+def emoji_entrada_para(cat: str) -> str:
+    return EMOJI_ENTRADA_CAT.get(cat, "📦")
 
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
@@ -95,16 +106,21 @@ async def health():
 async def verificar_usuario(usuario: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        count = await conn.fetchval(
+        count_gastos = await conn.fetchval(
             "SELECT COUNT(*) FROM gastos WHERE usuario = $1", usuario
         )
-    return {"existe": int(count) > 0}
+        count_entradas = await conn.fetchval(
+            "SELECT COUNT(*) FROM entradas WHERE usuario = $1", usuario
+        )
+    return {"existe": int(count_gastos) > 0 or int(count_entradas) > 0}
 
 
 @app.get("/api/resumo/{usuario}")
 async def resumo(usuario: str, ano: int, mes: int):
     gastos = await buscar_gastos_mes(usuario, ano, mes)
-    total = sum(float(g["valor"]) for g in gastos)
+    total_gastos = sum(float(g["valor"]) for g in gastos)
+    total_entradas = await total_entrada_mes(usuario, ano, mes)
+    saldo = total_entradas - total_gastos
 
     cat_map: dict[str, float] = {}
     for g in gastos:
@@ -115,7 +131,7 @@ async def resumo(usuario: str, ano: int, mes: int):
             {
                 "nome": cat,
                 "valor": round(val, 2),
-                "pct": round(val / total * 100, 1) if total > 0 else 0,
+                "pct": round(val / total_gastos * 100, 1) if total_gastos > 0 else 0,
                 "emoji": emoji_para(cat),
             }
             for cat, val in cat_map.items()
@@ -125,10 +141,12 @@ async def resumo(usuario: str, ano: int, mes: int):
     )
 
     limite = await buscar_limite(usuario)
-    pct_limite = round(total / limite * 100, 1) if limite else 0
+    pct_limite = round(total_gastos / limite * 100, 1) if limite else 0
 
     return {
-        "total": round(total, 2),
+        "total": round(total_gastos, 2),
+        "total_entradas": round(total_entradas, 2),
+        "saldo": round(saldo, 2),
         "num_gastos": len(gastos),
         "categorias": categorias,
         "limite": limite,
@@ -160,6 +178,37 @@ async def listar_gastos(usuario: str, ano: int, mes: int, categoria: Optional[st
     }
 
 
+@app.get("/api/entradas/{usuario}")
+async def listar_entradas(usuario: str, ano: int, mes: int, categoria: Optional[str] = None):
+    entradas = await buscar_entradas_mes(usuario, ano, mes)
+
+    if categoria:
+        entradas = [e for e in entradas if e["categoria"] == categoria]
+
+    return {
+        "entradas": [
+            {
+                "id": e["id"],
+                "descricao": e["descricao"],
+                "valor": float(e["valor"]),
+                "categoria": e["categoria"],
+                "data": e["data"].isoformat(),
+                "fonte": e.get("fonte", "texto"),
+                "emoji": emoji_entrada_para(e["categoria"]),
+            }
+            for e in entradas
+        ]
+    }
+
+
+@app.delete("/api/entradas/{usuario}/{entrada_id}")
+async def excluir_entrada(usuario: str, entrada_id: int):
+    ok = await deletar_entrada(entrada_id, usuario)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Entrada não encontrada")
+    return {"ok": True}
+
+
 @app.put("/api/gastos/{usuario}/{gasto_id}")
 async def editar_gasto(usuario: str, gasto_id: int, body: EditarGastoBody):
     ok = await atualizar_gasto(gasto_id, usuario, body.model_dump())
@@ -180,7 +229,7 @@ async def excluir_gasto(usuario: str, gasto_id: int):
 async def evolucao(usuario: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
+        rows_gastos = await conn.fetch(
             """
             SELECT
                 EXTRACT(YEAR  FROM data)::int AS ano,
@@ -194,19 +243,39 @@ async def evolucao(usuario: str):
             """,
             usuario,
         )
+        rows_entradas = await conn.fetch(
+            """
+            SELECT
+                EXTRACT(YEAR  FROM data)::int AS ano,
+                EXTRACT(MONTH FROM data)::int AS mes,
+                COALESCE(SUM(valor), 0)::float AS total
+            FROM entradas
+            WHERE usuario = $1
+              AND data >= (CURRENT_DATE - INTERVAL '5 months')::date
+            GROUP BY ano, mes
+            ORDER BY ano, mes
+            """,
+            usuario,
+        )
 
     MESES_SHORT = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
                    "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
+    # Merge gastos e entradas por ano/mes
+    gastos_map = {(r["ano"], r["mes"]): round(r["total"], 2) for r in rows_gastos}
+    entradas_map = {(r["ano"], r["mes"]): round(r["total"], 2) for r in rows_entradas}
+    all_keys = sorted(set(list(gastos_map.keys()) + list(entradas_map.keys())))
+
     return {
         "meses": [
             {
-                "nome": MESES_SHORT[r["mes"]],
-                "ano": r["ano"],
-                "mes": r["mes"],
-                "total": round(r["total"], 2),
+                "nome": MESES_SHORT[mes],
+                "ano": ano,
+                "mes": mes,
+                "total": gastos_map.get((ano, mes), 0.0),
+                "entradas": entradas_map.get((ano, mes), 0.0),
             }
-            for r in rows
+            for ano, mes in all_keys
         ]
     }
 
