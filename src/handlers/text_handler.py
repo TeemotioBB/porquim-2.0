@@ -4,6 +4,7 @@ from src.services.ia_service import processar_gasto_texto, processar_entrada_tex
 from src.services.report_service import gerar_resumo, definir_limite, verificar_limite_pos_gasto
 from src.services.reminder_service import (
     _detectar_lembrete_rapido,
+    detectar_lembrete_implicito,
     processar_lembrete,
     buscar_lembretes_pendentes,
     cancelar_lembrete,
@@ -387,8 +388,13 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Lembrete #{lembrete_id} cancelado!*"}
         return {"type": "text", "content": f"❌ Lembrete #{lembrete_id} não encontrado ou já foi enviado."}
 
-    # ── Lembrete: criar "me lembre...", "lembra de..." ────────────────────────
+    # ── Lembrete: criar com palavra-chave ("me lembre...", "lembra de...") ───
     if _detectar_lembrete_rapido(texto):
+        resposta = await processar_lembrete(texto, numero)
+        return {"type": "text", "content": resposta}
+
+    # ── Lembrete: criar sem palavra-chave ("reunião amanhã 12:00") ───────────
+    if await detectar_lembrete_implicito(texto):
         resposta = await processar_lembrete(texto, numero)
         return {"type": "text", "content": resposta}
 
