@@ -101,9 +101,7 @@ CARD_GASTO = """✅ *Gasto Registrado!*
 📅 {data}
 🔖 {hashtag}{alerta}
 
-_Salvo com sucesso!_ 🎉
-_Para remover este gasto responda: *remover*_
-_Para editar responda: *editar*_"""
+_Salvo com sucesso!_ 🎉"""
 
 CARD_ENTRADA = """✅ *Entrada Registrada!*
 
@@ -500,7 +498,7 @@ async def handle_text_message(message: dict) -> dict:
             hashtag=dados["hashtag"],
             alerta=alerta
         )
-        return {"type": "text", "content": card}
+        return {"type": "text", "content": card, "gasto_id": gasto_id}
     except Exception as e:
         print(f"❌ Erro ao processar texto: {e}")
         return {
