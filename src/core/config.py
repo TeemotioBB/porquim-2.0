@@ -17,5 +17,6 @@ class Settings:
     OPENAI_API_KEY: str = os.environ["OPENAI_API_KEY"]
 
     PORT: int = int(os.environ.get("PORT", 8080))
+    RESET_SECRET: str = os.environ.get("RESET_SECRET", "porquim-reset-2026")
 
 settings = Settings()
