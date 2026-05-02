@@ -7,7 +7,7 @@ import asyncio
 import json
 import re
 from datetime import datetime, timedelta
-import pytz
+from zoneinfo import ZoneInfo
 from openai import AsyncOpenAI
 from src.core.config import settings
 from src.core.database import get_pool
@@ -19,26 +19,7 @@ _grok = AsyncOpenAI(
 )
 
 # Fuso horário padrão (Brasil / São Paulo)
-TZ_BR = pytz.timezone("America/Sao_Paulo")
-
-# ─── Criar tabela de lembretes ────────────────────────────────────────────────
-
-async def criar_tabela_lembretes():
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS lembretes (
-                id SERIAL PRIMARY KEY,
-                usuario VARCHAR(50) NOT NULL,
-                mensagem TEXT NOT NULL,
-                horario TIMESTAMP WITH TIME ZONE NOT NULL,
-                enviado BOOLEAN DEFAULT FALSE,
-                criado_em TIMESTAMP DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS idx_lembretes_usuario ON lembretes(usuario);
-            CREATE INDEX IF NOT EXISTS idx_lembretes_horario ON lembretes(horario);
-            CREATE INDEX IF NOT EXISTS idx_lembretes_enviado ON lembretes(enviado);
-        """)
+TZ_BR = ZoneInfo("America/Sao_Paulo")
 
 
 # ─── Salvar lembrete ──────────────────────────────────────────────────────────
@@ -83,10 +64,6 @@ async def cancelar_lembrete(lembrete_id: int, usuario: str) -> bool:
 # ─── Parser de data/hora com Grok ─────────────────────────────────────────────
 
 async def _parsear_lembrete(texto: str) -> dict | None:
-    """
-    Usa Grok para extrair mensagem e horário de um texto de lembrete.
-    Retorna {"mensagem": str, "horario_iso": str} ou None se falhar.
-    """
     agora_br = datetime.now(TZ_BR)
     agora_str = agora_br.strftime("%Y-%m-%d %H:%M")
     dia_semana = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"][agora_br.weekday()]
@@ -139,20 +116,16 @@ Exemplos:
 # ─── Detectar intenção de lembrete ───────────────────────────────────────────
 
 def _detectar_lembrete_rapido(texto: str) -> bool:
-    """Verificação rápida por palavras-chave, sem chamar API."""
     t = texto.lower()
     padroes = [
         r"\b(me lembre|me lembra|lembra de|lembra que|me avisa|me avise)\b",
         r"\b(lembrete|agendar lembrete|criar lembrete)\b",
-        r"\b(me lembre[i]?|me notifica|me notifique)\b",
+        r"\b(me notifica|me notifique)\b",
     ]
     return any(re.search(p, t) for p in padroes)
 
 
 async def processar_lembrete(texto: str, usuario: str) -> str:
-    """
-    Processa texto de lembrete, salva no banco e retorna mensagem de confirmação.
-    """
     dados = await _parsear_lembrete(texto)
 
     if not dados or "horario_iso" not in dados:
@@ -169,7 +142,7 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
         agora = datetime.now(TZ_BR)
 
         if horario.tzinfo is None:
-            horario = TZ_BR.localize(horario)
+            horario = horario.replace(tzinfo=TZ_BR)
 
         if horario <= agora:
             return (
@@ -208,9 +181,6 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
 # ─── Background task ──────────────────────────────────────────────────────────
 
 async def _disparar_lembretes(enviar_func):
-    """
-    Verifica lembretes pendentes a cada 30 segundos e envia os que venceram.
-    """
     pool = await get_pool()
     while True:
         try:
@@ -258,7 +228,6 @@ async def _disparar_lembretes(enviar_func):
 
 
 def iniciar_background_lembretes(app, enviar_func):
-    """Inicia a task de lembretes quando o app sobe."""
     loop = asyncio.get_event_loop()
     task = loop.create_task(_disparar_lembretes(enviar_func))
     app.state.lembrete_task = task
