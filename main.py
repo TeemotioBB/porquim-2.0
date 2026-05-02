@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional
+from src.services.reminder_service import iniciar_background_lembretes
+
 
 from src.core.database import (
     get_pool,
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI):
     await get_pool()
     print("✅ Banco conectado e tabelas criadas!")
     app.state.processed_ids = set()
+    iniciar_background_lembretes(app, _enviar_resposta)
     yield
     print("👋 Encerrando Porquim...")
 
