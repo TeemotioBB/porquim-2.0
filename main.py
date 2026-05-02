@@ -99,40 +99,6 @@ async def _enviar_resposta(remote_jid: str, texto: str):
         return False
 
 
-async def _enviar_com_botao(remote_jid: str, texto: str, gasto_id: int):
-    """Envia mensagem com botão 🗑 Excluir via Evolution API."""
-    url = f"{settings.EVOLUTION_API_URL}/message/sendButtons/{settings.EVOLUTION_INSTANCE}"
-    payload = {
-        "number": remote_jid,
-        "title": texto,
-        "description": " ",
-        "footer": "Porquim IA",
-        "buttons": [
-            {
-                "type": "reply",
-                "displayText": "🗑 Excluir gasto",
-                "id": f"del_{gasto_id}"
-            }
-        ]
-    }
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={"apikey": settings.EVOLUTION_API_KEY}
-            )
-            print(f"📤 Evolution botão: {resp.status_code}")
-            if resp.status_code not in [200, 201]:
-                # Fallback para texto simples se botão falhar
-                print("⚠️ Botão falhou, enviando texto simples")
-                return await _enviar_resposta(remote_jid, texto)
-            return True
-    except Exception as e:
-        print(f"❌ Erro ao enviar botão: {e}")
-        return await _enviar_resposta(remote_jid, texto)
-
-
 # ════════════════════════════════════════════════════════════════════
 # ROTAS
 # ════════════════════════════════════════════════════════════════════
@@ -408,21 +374,6 @@ async def evolution_webhook(request: Request, any: str = None):
             "key": {"remoteJid": remote_jid}
         })
 
-    elif "buttonsResponseMessage" in msg:
-        button_id = msg["buttonsResponseMessage"].get("selectedButtonId", "")
-        print(f"🔘 Botão clicado: {button_id}")
-        if button_id.startswith("del_"):
-            try:
-                gasto_id = int(button_id.replace("del_", ""))
-                usuario = remote_jid.split("@")[0]
-                ok = await deletar_gasto(gasto_id, usuario)
-                texto_resp = "🗑️ *Gasto removido com sucesso!*" if ok else "❌ Gasto não encontrado ou já foi removido."
-                await _enviar_resposta(remote_jid, texto_resp)
-            except Exception as e:
-                print(f"❌ Erro ao excluir via botão: {e}")
-                await _enviar_resposta(remote_jid, "❌ Erro ao remover. Tente: *remover*")
-        return {"status": "ok"}
-
     elif "audioMessage" in msg:
         print("🎤 Áudio recebido")
         response = await handle_audio_message(
@@ -445,11 +396,7 @@ async def evolution_webhook(request: Request, any: str = None):
         return {"status": "ok"}
 
     if response:
-        gasto_id = response.get("gasto_id")
-        if gasto_id:
-            await _enviar_com_botao(remote_jid, response["content"], gasto_id)
-        else:
-            await _enviar_resposta(remote_jid, response["content"])
+        await _enviar_resposta(remote_jid, response["content"])
 
     return {"status": "ok"}
 
