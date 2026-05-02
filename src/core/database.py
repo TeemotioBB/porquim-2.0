@@ -34,8 +34,22 @@ async def _create_tables():
                 atualizado_em TIMESTAMP DEFAULT NOW()
             );
 
+            CREATE TABLE IF NOT EXISTS entradas (
+                id SERIAL PRIMARY KEY,
+                usuario VARCHAR(50) NOT NULL,
+                descricao TEXT NOT NULL,
+                valor DECIMAL(10,2) NOT NULL,
+                categoria VARCHAR(50) NOT NULL,
+                data DATE NOT NULL,
+                hashtag VARCHAR(20),
+                fonte VARCHAR(20) DEFAULT 'texto',
+                criado_em TIMESTAMP DEFAULT NOW()
+            );
+
             CREATE INDEX IF NOT EXISTS idx_gastos_usuario ON gastos(usuario);
             CREATE INDEX IF NOT EXISTS idx_gastos_data ON gastos(data);
+            CREATE INDEX IF NOT EXISTS idx_entradas_usuario ON entradas(usuario);
+            CREATE INDEX IF NOT EXISTS idx_entradas_data ON entradas(data);
         """)
 
 def _parse_date(s: str) -> _date:
@@ -139,3 +153,63 @@ async def buscar_limite(usuario: str) -> float | None:
     async with pool.acquire() as conn:
         val = await conn.fetchval("SELECT limite_mensal FROM limites WHERE usuario=$1", usuario)
         return float(val) if val is not None else None
+
+# ── Entradas ─────────────────────────────────────────────
+
+async def salvar_entrada(usuario: str, dados: dict, fonte: str = "texto") -> int:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            INSERT INTO entradas (usuario, descricao, valor, categoria, data, hashtag, fonte)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING id
+        """,
+            usuario,
+            dados["descricao"],
+            float(dados["valor"]),
+            dados.get("categoria", "Outros"),
+            _parse_date(dados["data"]) if isinstance(dados["data"], str) else dados["data"],
+            dados.get("hashtag", ""),
+            fonte
+        )
+        return row["id"]
+
+async def buscar_entradas_mes(usuario: str, ano: int, mes: int) -> list:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT * FROM entradas
+            WHERE usuario = $1
+              AND EXTRACT(YEAR FROM data) = $2
+              AND EXTRACT(MONTH FROM data) = $3
+            ORDER BY data DESC, criado_em DESC
+        """, usuario, ano, mes)
+        return [dict(r) for r in rows]
+
+async def total_entrada_mes(usuario: str, ano: int, mes: int) -> float:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        val = await conn.fetchval("""
+            SELECT COALESCE(SUM(valor), 0)
+            FROM entradas
+            WHERE usuario = $1
+              AND EXTRACT(YEAR FROM data) = $2
+              AND EXTRACT(MONTH FROM data) = $3
+        """, usuario, ano, mes)
+        return float(val)
+
+async def buscar_entrada_por_id(entrada_id: int, usuario: str) -> dict | None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM entradas WHERE id=$1 AND usuario=$2", entrada_id, usuario
+        )
+        return dict(row) if row else None
+
+async def deletar_entrada(entrada_id: int, usuario: str) -> bool:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM entradas WHERE id=$1 AND usuario=$2", entrada_id, usuario
+        )
+        return result == "DELETE 1"
