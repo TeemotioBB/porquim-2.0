@@ -12,17 +12,15 @@ from openai import AsyncOpenAI
 from src.core.config import settings
 from src.core.database import get_pool
 
-# ─── Cliente Grok ─────────────────────────────────────────────────────────────
 _grok = AsyncOpenAI(
     api_key=settings.GROK_API_KEY,
     base_url="https://api.x.ai/v1",
 )
 
-# Fuso horário padrão (Brasil / São Paulo)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
 
 
-# ─── Salvar lembrete ──────────────────────────────────────────────────────────
+# ─── Banco ────────────────────────────────────────────────────────────────────
 
 async def salvar_lembrete(usuario: str, mensagem: str, horario: datetime) -> int:
     pool = await get_pool()
@@ -61,7 +59,73 @@ async def cancelar_lembrete(lembrete_id: int, usuario: str) -> bool:
         return result != "DELETE 0"
 
 
-# ─── Parser de data/hora com Grok ─────────────────────────────────────────────
+# ─── Detecção ─────────────────────────────────────────────────────────────────
+
+# Palavras-chave explícitas de lembrete
+_PADROES_EXPLICITOS = [
+    r"\b(me lembre|me lembra|lembra de|lembra que|me avisa|me avise)\b",
+    r"\b(lembrete|agendar lembrete|criar lembrete)\b",
+    r"\b(me notifica|me notifique)\b",
+]
+
+# Padrões implícitos: assunto + referência de data/hora (sem palavra-chave)
+_PADROES_IMPLICITOS = [
+    # "reunião amanhã 12:00" / "consulta hoje às 15h"
+    r"\b\w+\b.{0,40}\b(amanhã|hoje|segunda|terça|quarta|quinta|sexta|sábado|domingo)\b.{0,20}\d{1,2}[h:]\d{0,2}",
+    # "reunião amanhã" / "dentista sexta"
+    r"\b\w+\b.{0,30}\b(amanhã|segunda|terça|quarta|quinta|sexta|sábado|domingo)\b",
+    # "amanhã 12:00 reunião"
+    r"\b(amanhã|hoje)\b.{0,20}\d{1,2}[h:]\d{0,2}",
+]
+
+
+def _detectar_lembrete_rapido(texto: str) -> bool:
+    """Detecta intenção de lembrete por palavras-chave explícitas."""
+    t = texto.lower()
+    return any(re.search(p, t) for p in _PADROES_EXPLICITOS)
+
+
+async def detectar_lembrete_implicito(texto: str) -> bool:
+    """
+    Para mensagens sem palavra-chave explícita mas com padrão de data/hora,
+    usa Grok para decidir se é um lembrete ou outra coisa.
+    """
+    t = texto.lower()
+
+    # Primeiro filtra por padrão implícito para não chamar API à toa
+    if not any(re.search(p, t) for p in _PADROES_IMPLICITOS):
+        return False
+
+    # Também ignora se parece claramente um gasto
+    if re.search(r"\b(cartão|pix|dinheiro|débito|crédito|reais|r\$)\b", t):
+        return False
+
+    try:
+        resp = await _grok.chat.completions.create(
+            model="grok-4-1-fast-non-reasoning",
+            max_tokens=5,
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Você classifica mensagens de WhatsApp. Responda APENAS: LEMBRETE ou NAO.\n\n"
+                        "LEMBRETE = mensagem que agenda um evento futuro para ser lembrado. "
+                        "Exemplos: 'reunião amanhã 12:00', 'consulta sexta 15h', 'dentista amanhã', "
+                        "'academia hoje 18h', 'ligação amanhã de manhã'.\n\n"
+                        "NAO = qualquer outra coisa, especialmente gastos financeiros."
+                    ),
+                },
+                {"role": "user", "content": texto},
+            ],
+        )
+        return resp.choices[0].message.content.strip().upper() == "LEMBRETE"
+    except Exception as e:
+        print(f"⚠️ Erro na detecção implícita de lembrete: {e}")
+        return False
+
+
+# ─── Extração com Grok ────────────────────────────────────────────────────────
 
 async def _parsear_lembrete(texto: str) -> dict | None:
     agora_br = datetime.now(TZ_BR)
@@ -74,28 +138,31 @@ Data e hora atual: {agora_str} ({dia_semana}-feira, fuso de Brasília)
 
 Responda APENAS com JSON válido, sem markdown, sem explicação:
 {{
-  "mensagem": "texto do lembrete (o que deve ser lembrado, sem a parte de agendamento)",
+  "mensagem": "descrição clara do que deve ser lembrado",
   "horario_iso": "YYYY-MM-DDTHH:MM:00-03:00"
 }}
 
-Regras:
+Regras para "mensagem":
+- Extraia o ASSUNTO do lembrete, ignorando as partes de data/hora e agendamento
+- Remova preposições e artigos soltos do início: "da", "do", "de", "para", "a", "o", "as", "os"
+- Exemplos: "me lembre da reunião" → "reunião"; "lembra de tomar remédio" → "tomar remédio"
+- Se a mensagem for só "reunião amanhã 12:00" → "reunião"
+- Se não houver assunto claro, use uma descrição genérica como "compromisso"
+
+Regras para "horario_iso":
 - "hoje" = {agora_br.strftime("%Y-%m-%d")}
 - "amanhã" = {(agora_br + timedelta(days=1)).strftime("%Y-%m-%d")}
-- Se não especificar data, assuma hoje
-- Horários como "9h", "9:00", "9 da manhã" → "09:00"
-- Horários como "14h", "14:00", "2 da tarde" → "14:00"
-- Prefira PM para ambiguidades (ex: "7h" sem contexto → 19:00 se já passou das 7h da manhã)
-- Se não conseguir extrair horário válido, retorne {{"erro": "horario_invalido"}}
-
-Exemplos:
-- "me lembre da reunião hoje às 14:00" → {{"mensagem": "reunião", "horario_iso": "{agora_br.strftime('%Y-%m-%d')}T14:00:00-03:00"}}
-- "lembra de tomar o remédio amanhã às 8h" → {{"mensagem": "tomar o remédio", "horario_iso": "{(agora_br + timedelta(days=1)).strftime('%Y-%m-%d')}T08:00:00-03:00"}}
-- "me avisa da consulta sexta às 15:30" → horario calculado para próxima sexta"""
+- Se não especificar data, assuma hoje (ou amanhã se o horário já passou)
+- Calcule a próxima ocorrência dos dias da semana (segunda, terça, etc.)
+- Horários: "9h"/"9:00"/"9 da manhã" → "09:00"; "14h"/"2 da tarde" → "14:00"
+- Se o horário for ambíguo (ex: só "7h"), prefira PM se já passou das 7h AM
+- Se não houver horário especificado, retorne {{"erro": "sem_horario"}}
+- Se não conseguir extrair, retorne {{"erro": "invalido"}}"""
 
     try:
         resp = await _grok.chat.completions.create(
             model="grok-4-1-fast-non-reasoning",
-            max_tokens=100,
+            max_tokens=120,
             temperature=0,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -113,17 +180,7 @@ Exemplos:
         return None
 
 
-# ─── Detectar intenção de lembrete ───────────────────────────────────────────
-
-def _detectar_lembrete_rapido(texto: str) -> bool:
-    t = texto.lower()
-    padroes = [
-        r"\b(me lembre|me lembra|lembra de|lembra que|me avisa|me avise)\b",
-        r"\b(lembrete|agendar lembrete|criar lembrete)\b",
-        r"\b(me notifica|me notifique)\b",
-    ]
-    return any(re.search(p, t) for p in padroes)
-
+# ─── Processar e salvar ───────────────────────────────────────────────────────
 
 async def processar_lembrete(texto: str, usuario: str) -> str:
     dados = await _parsear_lembrete(texto)
@@ -134,7 +191,7 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
             "Tente assim:\n"
             "_'Me lembre da reunião hoje às 14:00'_\n"
             "_'Lembra de tomar o remédio amanhã às 8h'_\n"
-            "_'Me avisa da consulta sexta às 15:30'_"
+            "_'Reunião amanhã 12:00'_"
         )
 
     try:
@@ -150,7 +207,12 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
                 "Exemplo: _'Me lembre da reunião amanhã às 14:00'_"
             )
 
-        mensagem = dados.get("mensagem", texto)
+        # Limpa a mensagem: remove preposições soltas do início
+        mensagem = dados.get("mensagem", texto).strip()
+        mensagem = re.sub(r"^(da|do|de|para|a|o|as|os)\s+", "", mensagem, flags=re.IGNORECASE).strip()
+        if not mensagem:
+            mensagem = "compromisso"
+
         lembrete_id = await salvar_lembrete(usuario, mensagem, horario)
 
         horario_br = horario.astimezone(TZ_BR)
