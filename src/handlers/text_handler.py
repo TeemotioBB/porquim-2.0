@@ -23,32 +23,74 @@ _grok = AsyncOpenAI(
     base_url="https://api.x.ai/v1",
 )
 
-AJUDA = """👋 Oi! Eu sou o Johnny 🐹💚
-Seu assistente financeiro aqui no WhatsApp.
+AJUDA = """👋 *Olá! Sou o MAYCON* 🤖
+_Seu assistente financeiro no WhatsApp!_
 
-Vou cuidar da sua grana com você, combinado? 😄
+━━━━━━━━━━━━━━━━━━
+📝 *REGISTRAR GASTO*
+━━━━━━━━━━━━━━━━━━
+Manda qualquer gasto no texto:
+- _"iFood 45 cartão"_
+- _"Uber 23,50 pix"_
+- _"Farmácia 89 dinheiro"_
+- _"Aluguel 1200"_
 
-💸 Pra registrar um gasto:
-É só mandar algo como:
-“Uber 27” ou “Almoço 35 cartão”
-(pode ser áudio ou foto também, eu entendo tudinho 👀)
+🎤 *Áudio:* Fala o gasto!
+_"Gastei 50 reais no mercado com cartão"_
 
-💰 Entrou dinheiro?
-“Salário 3000” ou “Recebi 500”
+📷 *Foto:* Manda foto do comprovante!
+_O MAYCON lê e registra automático_
 
-📊 Quer ver como tá indo?
-Digite: resumo
-ou acompanhe tudo no seu dashboard:
-👉 https://dashboard-porquim-theta.vercel.app
+━━━━━━━━━━━━━━━━━━
+💵 *REGISTRAR ENTRADA*
+━━━━━━━━━━━━━━━━━━
+Manda qualquer entrada de dinheiro:
+- _"salário 3000"_
+- _"recebi freelance 500"_
+- _"me pagaram 800"_
+- _"reembolso 150"_
 
-🔔 Também te ajudo com lembretes!
-Ex: “Tenho reunião hoje 14h”
-e eu te aviso na hora certa ⏰
+━━━━━━━━━━━━━━━━━━
+📊 *VER RELATÓRIOS*
+━━━━━━━━━━━━━━━━━━
+- *resumo* → mês atual
+- *resumo mês passado* → mês anterior
+- *resumo janeiro* → mês específico
+- *resumo janeiro 2025* → mês e ano
 
-❓ Precisou de ajuda?
-Digite: suporte
+━━━━━━━━━━━━━━━━━━
+✏️ *EDITAR / REMOVER*
+━━━━━━━━━━━━━━━━━━
+Após registrar um gasto:
+- *remover* → remove o último gasto
+- *editar* → edita o último gasto
 
-Um hábito simples que muda tudo 💚"""
+No resumo, pelo número:
+- *remover 2* → remove o gasto 2️⃣
+- *editar 2 Uber 50 cartão* → edita o gasto 2️⃣
+
+Para entradas:
+- *remover entrada* → remove a última entrada
+
+━━━━━━━━━━━━━━━━━━
+💳 *LIMITE MENSAL*
+━━━━━━━━━━━━━━━━━━
+- *limite 2000* → define seu limite
+_Te aviso quando passar de 80% e 100%!_
+
+━━━━━━━━━━━━━━━━━━
+🔔 *LEMBRETES*
+━━━━━━━━━━━━━━━━━━
+- _"Me lembre da reunião hoje às 14:00"_
+- _"Lembra de tomar o remédio amanhã às 8h"_
+- _"Me avisa da consulta sexta às 15:30"_
+- *meus lembretes* → ver agendados
+- *cancelar lembrete 3* → cancela pelo ID
+
+━━━━━━━━━━━━━━━━━━
+- *ajuda* ou *menu* → mostra este guia
+━━━━━━━━━━━━━━━━━━
+Bora controlar as finanças? 🚀"""
 
 CARD_GASTO = """✅ *Gasto Registrado!*
 
@@ -85,6 +127,7 @@ MESES_NOMES = {
 _ultimo_gasto: dict[str, int] = {}
 _ultima_entrada: dict[str, int] = {}
 _resumo_gastos: dict[str, list] = {}
+_lote_gastos: dict[str, list] = {}  # IDs do último lote agrupado
 
 
 # ─── Detecção de intenção: GASTO ─────────────────────────────────────────────
@@ -264,6 +307,21 @@ async def handle_text_message(message: dict) -> dict:
 
     # ── Remover último gasto: "remover" ───────────────────────────────────────
     if texto_lower == "remover":
+        # Se veio de um lote, remove todos de uma vez
+        lote = _lote_gastos.pop(numero, [])
+        if lote:
+            removidos = []
+            for gid in lote:
+                g = await buscar_gasto_por_id(gid, numero)
+                if g:
+                    ok = await deletar_gasto(gid, numero)
+                    if ok:
+                        removidos.append(f"_{g['descricao']} · R$ {float(g['valor']):.2f}_")
+            _ultimo_gasto.pop(numero, None)
+            if removidos:
+                return {"type": "text", "content": "🗑️ *LOTE REMOVIDO!*"}
+            return {"type": "text", "content": "❌ Não consegui remover os gastos. Tente novamente."}
+
         gasto_id = _ultimo_gasto.get(numero)
         if not gasto_id:
             return {"type": "text", "content": "❌ Nenhum gasto recente para remover.\nUse *resumo* para ver seus gastos e remover pelo número."}
@@ -388,12 +446,12 @@ async def handle_text_message(message: dict) -> dict:
         if len(linhas_com_numero) >= 2:
             cards = []
             falhas = []
-            ultimo_id = None
+            ids_registrados = []
             for linha in linhas_com_numero:
                 try:
                     dados = await processar_gasto_texto(linha)
                     gasto_id = await salvar_gasto(numero, dados, fonte="texto")
-                    ultimo_id = gasto_id
+                    ids_registrados.append(gasto_id)
                     alerta = await verificar_limite_pos_gasto(numero) or ""
                     card = CARD_GASTO.format(
                         descricao=dados["descricao"],
@@ -409,8 +467,9 @@ async def handle_text_message(message: dict) -> dict:
                     print(f"⚠️ Falha ao processar linha '{linha}': {e}")
                     falhas.append(f"❌ Não entendi: _{linha}_")
 
-            if ultimo_id:
-                _ultimo_gasto[numero] = ultimo_id
+            if ids_registrados:
+                _ultimo_gasto[numero] = ids_registrados[-1]
+                _lote_gastos[numero] = list(ids_registrados)
 
             partes = cards[:]
             if falhas:
