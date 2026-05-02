@@ -50,6 +50,19 @@ async def _create_tables():
             CREATE INDEX IF NOT EXISTS idx_gastos_data ON gastos(data);
             CREATE INDEX IF NOT EXISTS idx_entradas_usuario ON entradas(usuario);
             CREATE INDEX IF NOT EXISTS idx_entradas_data ON entradas(data);
+
+            CREATE TABLE IF NOT EXISTS lembretes (
+                id SERIAL PRIMARY KEY,
+                usuario VARCHAR(50) NOT NULL,
+                mensagem TEXT NOT NULL,
+                horario TIMESTAMP WITH TIME ZONE NOT NULL,
+                enviado BOOLEAN DEFAULT FALSE,
+                criado_em TIMESTAMP DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_lembretes_usuario ON lembretes(usuario);
+            CREATE INDEX IF NOT EXISTS idx_lembretes_horario ON lembretes(horario);
+            CREATE INDEX IF NOT EXISTS idx_lembretes_enviado ON lembretes(enviado);
         """)
 
 def _parse_date(s: str) -> _date:
