@@ -1,8 +1,11 @@
 import re
 from datetime import date, timedelta
-from src.services.ia_service import processar_gasto_texto
+from src.services.ia_service import processar_gasto_texto, processar_entrada_texto
 from src.services.report_service import gerar_resumo, definir_limite, verificar_limite_pos_gasto
-from src.core.database import salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id
+from src.core.database import (
+    salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id,
+    salvar_entrada, deletar_entrada, buscar_entrada_por_id
+)
 from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
 from openai import AsyncOpenAI
@@ -32,6 +35,14 @@ _"Gastei 50 reais no mercado com cartão"_
 _O MAYCON lê e registra automático_
 
 ━━━━━━━━━━━━━━━━━━
+💵 *REGISTRAR ENTRADA*
+━━━━━━━━━━━━━━━━━━
+Use a palavra *recebi* ou *entrada*:
+- _"recebi salário 3000"_
+- _"entrada freelance 500"_
+- _"recebi reembolso 150"_
+
+━━━━━━━━━━━━━━━━━━
 📊 *VER RELATÓRIOS*
 ━━━━━━━━━━━━━━━━━━
 - *resumo* → mês atual
@@ -49,6 +60,9 @@ Após registrar um gasto:
 No resumo, pelo número:
 - *remover 2* → remove o gasto 2️⃣
 - *editar 2 Uber 50 cartão* → edita o gasto 2️⃣
+
+Para entradas:
+- *remover entrada* → remove a última entrada
 
 ━━━━━━━━━━━━━━━━━━
 💳 *LIMITE MENSAL*
@@ -74,6 +88,17 @@ _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
 _Para editar responda: *editar*_"""
 
+CARD_ENTRADA = """✅ *Entrada Registrada!*
+
+📍 {descricao}
+💵 R$ {valor:.2f}
+🏷️ {categoria}
+📅 {data}
+🔖 {hashtag}
+
+_Salvo com sucesso!_ 🎉
+_Para remover esta entrada responda: *remover entrada*_"""
+
 MESES_NOMES = {
     "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
     "abril": 4, "maio": 5, "junho": 6, "julho": 7,
@@ -81,8 +106,9 @@ MESES_NOMES = {
     "novembro": 11, "dezembro": 12
 }
 
-# Memória em RAM: último gasto por usuário e lista do resumo
+# Memória em RAM: último gasto/entrada por usuário e lista do resumo
 _ultimo_gasto: dict[str, int] = {}       # usuario -> gasto_id
+_ultima_entrada: dict[str, int] = {}     # usuario -> entrada_id
 _resumo_gastos: dict[str, list] = {}     # usuario -> lista de gastos do último resumo
 
 
@@ -97,15 +123,12 @@ async def _detectar_intencao(texto: str) -> str:
     t = texto.strip().lower()
 
     # ── Heurística rápida: textos claramente não-gasto ────────────────────────
-    # Sem nenhum dígito na mensagem → impossível ser um gasto com valor
     if not re.search(r"\d", t):
         return "OUTRO"
 
-    # Apenas emojis, risadas, interjeições curtas
     if re.fullmatch(r"[kkkhahehe😂🤣👍🙏❤️\s!?.]+", t):
         return "OUTRO"
 
-    # Frases claramente conversacionais
     padroes_outro = [
         r"^(oi|olá|ola|ei|eai|e aí|opa|hey)\b",
         r"^(tudo bem|tudo bom|como vai|tá bom|ok|okay|certo|entendi|show)\b",
@@ -117,13 +140,9 @@ async def _detectar_intencao(texto: str) -> str:
         if re.search(p, t):
             return "OUTRO"
 
-    # Parece gasto: tem número E palavra que sugere valor/estabelecimento
-    # Ex: "uber 25", "mc donalds 45", "gasolina 90", "aluguel 1500"
     if re.search(r"\b\d+([.,]\d+)?\b", t) and len(t.split()) >= 2:
-        # Heurística positiva: provavelmente um gasto, passa pro Grok confirmar
         pass
     elif re.search(r"\b\d+([.,]\d+)?\b", t) and len(t.split()) == 1:
-        # Só um número solto → não é gasto
         return "OUTRO"
 
     # ── Segunda camada: Grok para casos ambíguos ──────────────────────────────
@@ -153,7 +172,6 @@ async def _detectar_intencao(texto: str) -> str:
         return resultado if resultado in ("GASTO", "OUTRO") else "OUTRO"
     except Exception as e:
         print(f"⚠️ Erro na detecção de intenção: {e}")
-        # Em caso de falha da API, tenta registrar (comportamento original)
         return "GASTO"
 
 
@@ -218,6 +236,20 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Gasto removido!*\n\n_{g['descricao']} · R$ {float(g['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
+    # ── Remover última entrada: "remover entrada" ─────────────────────────────
+    if texto_lower == "remover entrada":
+        entrada_id = _ultima_entrada.get(numero)
+        if not entrada_id:
+            return {"type": "text", "content": "❌ Nenhuma entrada recente para remover."}
+        e = await buscar_entrada_por_id(entrada_id, numero)
+        if not e:
+            return {"type": "text", "content": "❌ Entrada não encontrada ou já foi removida."}
+        ok = await deletar_entrada(entrada_id, numero)
+        if ok:
+            _ultima_entrada.pop(numero, None)
+            return {"type": "text", "content": f"🗑️ *Entrada removida!*\n\n_{e['descricao']} · R$ {float(e['valor']):.2f}_"}
+        return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
+
     # ── Remover último gasto: "remover" ───────────────────────────────────────
     if texto_lower == "remover":
         gasto_id = _ultimo_gasto.get(numero)
@@ -278,6 +310,30 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": await definir_limite(numero, valor)}
         except ValueError:
             return {"type": "text", "content": "❌ Valor inválido. Ex: _limite 2000_"}
+
+    # ── Registrar entrada: "recebi ..." ou "entrada ..." ─────────────────────
+    if re.match(r"^(recebi|entrada)\b", texto_lower):
+        try:
+            dados = await processar_entrada_texto(texto)
+            entrada_id = await salvar_entrada(numero, dados, fonte="texto")
+            _ultima_entrada[numero] = entrada_id
+            card = CARD_ENTRADA.format(
+                descricao=dados["descricao"],
+                valor=float(dados["valor"]),
+                categoria=dados.get("categoria", "Outros"),
+                data=dados["data"],
+                hashtag=dados["hashtag"],
+            )
+            return {"type": "text", "content": card}
+        except Exception as e:
+            print(f"❌ Erro ao processar entrada: {e}")
+            return {
+                "type": "text",
+                "content": (
+                    "😅 Não entendi essa entrada. Tente algo como:\n"
+                    "_'recebi salário 3000'_ ou _'entrada freelance 500'_"
+                )
+            }
 
     # ── Detecção de intenção → Registrar gasto ────────────────────────────────
     intencao = await _detectar_intencao(texto)
