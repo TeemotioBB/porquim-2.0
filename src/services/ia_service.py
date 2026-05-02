@@ -25,7 +25,7 @@ Analise a mensagem e extraia em JSON:
 - descricao: descrição limpa do gasto
 - categoria: uma de ({categorias})
 - forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato DD-MM-YYYY. Hoje é {hoje}. Se disser "ontem" use o dia anterior, "semana passada" use 7 dias atrás, etc. Se não mencionar data use {hoje}.
+- data: data no formato DD-MM-YYYY. Hoje é {hoje} (use SEMPRE este ano {ano} como referência). Se mencionar um mês (ex: "maio", "janeiro"), use o dia 1 desse mês no ano {ano}. Se disser "ontem" use o dia anterior a hoje. Se não mencionar data use {hoje}.
 
 Mensagem: {texto}
 Responda APENAS com JSON válido, sem markdown.
@@ -49,10 +49,12 @@ def _gerar_hashtag(texto: str) -> str:
 
 async def processar_gasto_texto(texto: str, contexto: str = "") -> dict:
     """Extrai dados de gasto de uma mensagem de texto."""
-    hoje = str(date.today())
+    hoje_dt = date.today()
+    hoje = hoje_dt.strftime("%d-%m-%Y")
+    ano = str(hoje_dt.year)
     texto_completo = f"{contexto}\n{texto}".strip() if contexto else texto
     prompt = PROMPT_EXTRACAO.format(
-        categorias=CATEGORIAS, hoje=hoje, texto=texto_completo
+        categorias=CATEGORIAS, hoje=hoje, ano=ano, texto=texto_completo
     )
     resp = await grok.chat.completions.create(
         model="grok-4-1-fast-non-reasoning",
@@ -63,6 +65,7 @@ async def processar_gasto_texto(texto: str, contexto: str = "") -> dict:
     raw = raw.replace("```json", "").replace("```", "").strip()
     dados = json.loads(raw)
     dados["hashtag"] = _gerar_hashtag(texto)
+    print(f"📦 Gasto extraído: {dados}")
     return dados
 
 
