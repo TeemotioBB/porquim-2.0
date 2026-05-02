@@ -422,6 +422,36 @@ async def handle_text_message(message: dict) -> dict:
                 )
             }
 
+    # ── Múltiplos gastos agrupados (uma linha por gasto) ──────────────────────
+    linhas = [l.strip() for l in texto.strip().splitlines() if l.strip()]
+    if len(linhas) > 1:
+        # Verifica se parece uma lista de gastos: pelo menos 2 linhas com número
+        linhas_com_numero = [l for l in linhas if re.search(r"\d", l)]
+        if len(linhas_com_numero) >= 2:
+            sucessos = []
+            falhas = []
+            ultimo_id = None
+            for linha in linhas_com_numero:
+                try:
+                    dados = await processar_gasto_texto(linha)
+                    gasto_id = await salvar_gasto(numero, dados, fonte="texto")
+                    ultimo_id = gasto_id
+                    sucessos.append(f"✅ {dados['descricao']} · R$ {float(dados['valor']):.2f} ({dados['forma_pagamento']})")
+                except Exception as e:
+                    print(f"⚠️ Falha ao processar linha '{linha}': {e}")
+                    falhas.append(f"❌ _{linha}_")
+
+            if ultimo_id:
+                _ultimo_gasto[numero] = ultimo_id
+
+            partes = [f"📋 *{len(sucessos)} gasto(s) registrado(s):*\n"]
+            partes.extend(sucessos)
+            if falhas:
+                partes.append("\n⚠️ *Não entendi:*")
+                partes.extend(falhas)
+            partes.append("\n_Para remover o último: *remover*_")
+            return {"type": "text", "content": "\n".join(partes)}
+
     # ── Detecção de intenção → Registrar gasto ────────────────────────────────
     intencao = await _detectar_intencao(texto)
 
