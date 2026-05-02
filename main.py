@@ -298,6 +298,16 @@ async def definir_limite(usuario: str, body: LimiteBody):
 # RESET
 # ════════════════════════════════════════════════════════════════════
 
+@app.get("/api/usuarios")
+async def listar_usuarios(senha: str = ""):
+    if senha != settings.RESET_SECRET:
+        raise HTTPException(status_code=403, detail="Senha incorreta.")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        usuarios = await conn.fetch("SELECT DISTINCT usuario FROM gastos UNION SELECT DISTINCT usuario FROM entradas")
+    return {"usuarios": [r["usuario"] for r in usuarios]}
+
+
 @app.get("/api/reset/{usuario}")
 async def reset_usuario(usuario: str, senha: str = ""):
     if senha != settings.RESET_SECRET:
