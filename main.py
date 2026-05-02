@@ -58,6 +58,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Porquim 2.0 🐷", lifespan=lifespan)
 
+# Estado compartilhado: último gasto por usuário (para remover/editar após áudio/imagem)
+_ultimo_gasto_global: dict[str, int] = {}
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
@@ -343,7 +346,7 @@ async def evolution_webhook(request: Request, any: str = None):
         response = await handle_audio_message(
             msg_data=msg_data,
             remote_jid=remote_jid,
-            ultimo_gasto=None
+            ultimo_gasto=_ultimo_gasto_global
         )
 
     elif "imageMessage" in msg:
@@ -351,7 +354,8 @@ async def evolution_webhook(request: Request, any: str = None):
         print(f"📷 Imagem recebida (caption: '{caption}')")
         response = await handle_image_message(
             msg_data=msg_data,
-            remote_jid=remote_jid
+            remote_jid=remote_jid,
+            ultimo_gasto=_ultimo_gasto_global
         )
 
     else:
