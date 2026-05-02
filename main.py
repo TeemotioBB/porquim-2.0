@@ -295,6 +295,29 @@ async def definir_limite(usuario: str, body: LimiteBody):
 
 
 # ════════════════════════════════════════════════════════════════════
+# RESET
+# ════════════════════════════════════════════════════════════════════
+
+@app.get("/api/reset/{usuario}")
+async def reset_usuario(usuario: str, senha: str = ""):
+    if senha != settings.RESET_SECRET:
+        raise HTTPException(status_code=403, detail="Senha incorreta.")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        gastos_del = await conn.execute("DELETE FROM gastos WHERE usuario = $1", usuario)
+        entradas_del = await conn.execute("DELETE FROM entradas WHERE usuario = $1", usuario)
+    n_gastos = int(gastos_del.split()[-1])
+    n_entradas = int(entradas_del.split()[-1])
+    return {
+        "ok": True,
+        "usuario": usuario,
+        "gastos_removidos": n_gastos,
+        "entradas_removidas": n_entradas,
+        "mensagem": f"✅ Zerado! {n_gastos} gasto(s) e {n_entradas} entrada(s) removidos."
+    }
+
+
+# ════════════════════════════════════════════════════════════════════
 # WEBHOOK WHATSAPP
 # ════════════════════════════════════════════════════════════════════
 
