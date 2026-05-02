@@ -428,7 +428,7 @@ async def handle_text_message(message: dict) -> dict:
         # Verifica se parece uma lista de gastos: pelo menos 2 linhas com número
         linhas_com_numero = [l for l in linhas if re.search(r"\d", l)]
         if len(linhas_com_numero) >= 2:
-            sucessos = []
+            cards = []
             falhas = []
             ultimo_id = None
             for linha in linhas_com_numero:
@@ -436,21 +436,28 @@ async def handle_text_message(message: dict) -> dict:
                     dados = await processar_gasto_texto(linha)
                     gasto_id = await salvar_gasto(numero, dados, fonte="texto")
                     ultimo_id = gasto_id
-                    sucessos.append(f"✅ {dados['descricao']} · R$ {float(dados['valor']):.2f} ({dados['forma_pagamento']})")
+                    alerta = await verificar_limite_pos_gasto(numero) or ""
+                    card = CARD_GASTO.format(
+                        descricao=dados["descricao"],
+                        valor=float(dados["valor"]),
+                        categoria=dados["categoria"],
+                        forma_pagamento=dados["forma_pagamento"],
+                        data=dados["data"],
+                        hashtag=dados["hashtag"],
+                        alerta=alerta,
+                    )
+                    cards.append(card)
                 except Exception as e:
                     print(f"⚠️ Falha ao processar linha '{linha}': {e}")
-                    falhas.append(f"❌ _{linha}_")
+                    falhas.append(f"❌ Não entendi: _{linha}_")
 
             if ultimo_id:
                 _ultimo_gasto[numero] = ultimo_id
 
-            partes = [f"📋 *{len(sucessos)} gasto(s) registrado(s):*\n"]
-            partes.extend(sucessos)
+            partes = cards[:]
             if falhas:
-                partes.append("\n⚠️ *Não entendi:*")
                 partes.extend(falhas)
-            partes.append("\n_Para remover o último: *remover*_")
-            return {"type": "text", "content": "\n".join(partes)}
+            return {"type": "text", "content": "\n\n─────────────\n\n".join(partes)}
 
     # ── Detecção de intenção → Registrar gasto ────────────────────────────────
     intencao = await _detectar_intencao(texto)
