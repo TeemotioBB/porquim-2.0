@@ -539,6 +539,8 @@ async def webhook_pagamento(request: Request):
                 return {"ok": False}
         except Exception as e:
             print(f"⚠️ Erro na verificação MP: {e}")
+            # Se a verificação falhar por erro inesperado, bloqueia por segurança
+            return {"ok": False}
 
     data = json.loads(body_bytes)
 
@@ -621,10 +623,12 @@ async def webhook_pagamento(request: Request):
         resultado = await ativar_assinatura(jid, token)
         if resultado["ok"]:
             dias = resultado.get("expira") and (resultado["expira"] - datetime.now(timezone.utc)).days
+            dias_extras = resultado.get("dias_extras", 0)
+            extra_msg = f"\n⏭ _+{dias_extras} dias do ciclo anterior foram somados!_" if dias_extras > 0 else ""
             await _enviar_resposta(jid,
                 f"✅ Pagamento confirmado! Bem-vindo ao Porquim 🐷\n\n"
                 f"📋 Plano: {plano_label}\n"
-                f"📅 Válido por {dias} dias\n\n"
+                f"📅 Válido por {dias} dias{extra_msg}\n\n"
                 f"Pode começar agora! Me manda um gasto:\n"
                 f"Ex: _gastei 25 reais no ifood_"
             )
@@ -652,7 +656,9 @@ async def webhook_pagamento(request: Request):
 # ════════════════════════════════════════════════════════════════════
 
 @app.get("/testar-pagamento/{payment_id}")
-async def testar_pagamento(payment_id: str):
+async def testar_pagamento(payment_id: str, senha: str = ""):
+    if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
+        raise HTTPException(status_code=403, detail="Acesso negado")
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -770,11 +776,13 @@ async def evolution_webhook(request: Request, any: str = None):
             plano = resultado["plano"]
             expira = resultado["expira"]
             dias = (expira - datetime.now(timezone.utc)).days
+            dias_extras = resultado.get("dias_extras", 0)
             plano_label = "Anual 🎉" if plano == "anual" else "Mensal"
+            extra_msg = f"\n⏭ _+{dias_extras} dias do ciclo anterior foram somados!_" if dias_extras > 0 else ""
             await _enviar_resposta(remote_jid,
                 f"✅ Acesso ativado com sucesso!\n\n"
                 f"📋 Plano: {plano_label}\n"
-                f"📅 Válido por {dias} dias\n\n"
+                f"📅 Válido por {dias} dias{extra_msg}\n\n"
                 f"Seja bem-vindo ao Porquim 🐷\n"
                 f"Me manda um gasto pra começar! Ex: _gastei 15 reais no mercado_"
             )
@@ -787,10 +795,6 @@ async def evolution_webhook(request: Request, any: str = None):
             await _enviar_resposta(remote_jid,
                 "❌ Este token já foi utilizado por outro número.\n"
                 "Se você acredita que houve um erro, entre em contato."
-            )
-        elif resultado["motivo"] == "ja_tem_assinatura_ativa":
-            await _enviar_resposta(remote_jid,
-                "✅ Você já tem uma assinatura ativa! Pode usar o bot normalmente 🐷"
             )
         return {"status": "ok"}
 
