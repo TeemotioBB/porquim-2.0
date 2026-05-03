@@ -370,10 +370,10 @@ async def criar_preferencia(body: PreferenciaBody):
     plano = body.plano if body.plano in precos else "mensal"
     valor = precos[plano]
 
-    # Normaliza o número: garante DDI 55 e só dígitos
+    # Normaliza o número: apenas dígitos, sem DDI 55
     numero_limpo = ''.join(filter(str.isdigit, body.whatsapp))
-    if not numero_limpo.startswith("55"):
-        numero_limpo = f"55{numero_limpo}"
+    if numero_limpo.startswith("55") and len(numero_limpo) > 11:
+        numero_limpo = numero_limpo[2:]  # remove o 55 se vier com DDI
 
     print(f"🔗 Criando preferência | plano={plano} | whatsapp={numero_limpo}")
 
@@ -389,7 +389,7 @@ async def criar_preferencia(body: PreferenciaBody):
                         "unit_price": valor,
                         "currency_id": "BRL"
                     }],
-                    "external_reference": numero_limpo,   # ← número WA do comprador
+                    "external_reference": numero_limpo,   # ← número WA do comprador (sem DDI 55)
                     "metadata": {"plano": plano, "whatsapp": numero_limpo},
                     "back_urls": {
                         "success": "https://wa.me/" + BOT_WHATSAPP_NUMBER + "?text=Oi%2C+acabei+de+pagar!",
@@ -508,9 +508,11 @@ async def webhook_pagamento(request: Request):
 
     # Se encontrou o WhatsApp, ativa automaticamente e manda mensagem
     if telefone_raw:
+        # Normaliza: apenas dígitos, sem DDI 55 (padrão de armazenamento do bot)
         numero_limpo = ''.join(filter(str.isdigit, telefone_raw))
-        if not numero_limpo.startswith("55"):
-            numero_limpo = f"55{numero_limpo}"
+        if numero_limpo.startswith("55") and len(numero_limpo) > 11:
+            numero_limpo = numero_limpo[2:]  # remove 55 se vier com DDI
+
         jid = f"{numero_limpo}@s.whatsapp.net"
 
         resultado = await ativar_assinatura(jid, token)
