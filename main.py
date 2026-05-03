@@ -135,15 +135,39 @@ async def health():
 
 @app.get("/api/verificar/{usuario}")
 async def verificar_usuario(usuario: str):
+    # Gera todas as variações do número (com/sem 55, com/sem 9) para busca no banco
+    def _variantes_num(n: str) -> list:
+        v = {n}
+        sem55 = n[2:] if n.startswith("55") and len(n) > 11 else n
+        com55 = n if n.startswith("55") else "55" + n
+        v.add(sem55); v.add(com55)
+        extras = set()
+        for x in v:
+            base = x[2:] if x.startswith("55") else x
+            if len(base) == 11 and base[2] == "9":
+                sem9 = base[:2] + base[3:]
+                extras.add(sem9); extras.add("55" + sem9)
+            elif len(base) == 10:
+                com9 = base[:2] + "9" + base[2:]
+                extras.add(com9); extras.add("55" + com9)
+        v |= extras
+        return list(v)
+
+    variantes = _variantes_num(usuario)
     pool = await get_pool()
     async with pool.acquire() as conn:
-        count_gastos = await conn.fetchval(
-            "SELECT COUNT(*) FROM gastos WHERE usuario = $1", usuario
-        )
-        count_entradas = await conn.fetchval(
-            "SELECT COUNT(*) FROM entradas WHERE usuario = $1", usuario
-        )
-    return {"existe": int(count_gastos) > 0 or int(count_entradas) > 0}
+        for v in variantes:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM gastos WHERE usuario = $1", v
+            )
+            if int(count) > 0:
+                return {"existe": True, "usuario": v}
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM entradas WHERE usuario = $1", v
+            )
+            if int(count) > 0:
+                return {"existe": True, "usuario": v}
+    return {"existe": False}
 
 
 @app.get("/api/resumo/{usuario}")
