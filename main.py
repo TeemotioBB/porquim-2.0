@@ -396,7 +396,7 @@ async def criar_preferencia(body: PreferenciaBody):
     if not MP_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="MP_ACCESS_TOKEN não configurado")
 
-    precos = {"mensal": 19.90, "anual": 67.00}
+    precos = {"mensal": 1.90, "anual": 67.00}
     plano = body.plano if body.plano in precos else "mensal"
     valor = precos[plano]
 
