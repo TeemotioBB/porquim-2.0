@@ -347,6 +347,74 @@ async def reset_usuario(usuario: str, senha: str = ""):
 
 
 # ════════════════════════════════════════════════════════════════════
+# CRIAR PREFERÊNCIA — gera link de pagamento personalizado com o
+# WhatsApp do comprador embutido no external_reference
+# ════════════════════════════════════════════════════════════════════
+
+class PreferenciaBody(BaseModel):
+    plano: str          # "mensal" ou "anual"
+    whatsapp: str       # ex: "5531999999999" ou "31999999999"
+
+@app.post("/criar-preferencia")
+async def criar_preferencia(body: PreferenciaBody):
+    """
+    Chamado pela landing page antes de redirecionar ao Mercado Pago.
+    Cria uma preferência de pagamento com o número de WhatsApp do
+    comprador no campo external_reference — assim o webhook consegue
+    identificar para quem ativar a assinatura.
+    """
+    if not MP_ACCESS_TOKEN:
+        raise HTTPException(status_code=500, detail="MP_ACCESS_TOKEN não configurado")
+
+    precos = {"mensal": 19.90, "anual": 67.00}
+    plano = body.plano if body.plano in precos else "mensal"
+    valor = precos[plano]
+
+    # Normaliza o número: garante DDI 55 e só dígitos
+    numero_limpo = ''.join(filter(str.isdigit, body.whatsapp))
+    if not numero_limpo.startswith("55"):
+        numero_limpo = f"55{numero_limpo}"
+
+    print(f"🔗 Criando preferência | plano={plano} | whatsapp={numero_limpo}")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                "https://api.mercadopago.com/checkout/preferences",
+                headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
+                json={
+                    "items": [{
+                        "title": f"Porquim – Plano {plano.capitalize()}",
+                        "quantity": 1,
+                        "unit_price": valor,
+                        "currency_id": "BRL"
+                    }],
+                    "external_reference": numero_limpo,   # ← número WA do comprador
+                    "metadata": {"plano": plano, "whatsapp": numero_limpo},
+                    "back_urls": {
+                        "success": "https://wa.me/" + BOT_WHATSAPP_NUMBER + "?text=Oi%2C+acabei+de+pagar!",
+                        "failure": "",
+                        "pending": ""
+                    },
+                    "auto_return": "approved",
+                    "statement_descriptor": "PORQUIM"
+                }
+            )
+            dados = resp.json()
+    except Exception as e:
+        print(f"❌ Erro ao criar preferência no MP: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao gerar link de pagamento")
+
+    init_point = dados.get("init_point")
+    if not init_point:
+        print(f"❌ Resposta inesperada do MP: {dados}")
+        raise HTTPException(status_code=500, detail="Link de pagamento não retornado pelo MP")
+
+    print(f"✅ Preferência criada | link={init_point}")
+    return {"link": init_point, "plano": plano, "whatsapp": numero_limpo}
+
+
+# ════════════════════════════════════════════════════════════════════
 # WEBHOOK MERCADO PAGO — geração de token após pagamento aprovado
 # ════════════════════════════════════════════════════════════════════
 
@@ -365,10 +433,11 @@ async def webhook_pagamento(request: Request):
         signature = request.headers.get("x-signature", "")
         request_id = request.headers.get("x-request-id", "")
         try:
+            data_tmp = json.loads(body_bytes)
             parts = dict(p.split("=", 1) for p in signature.split(","))
             ts = parts.get("ts", "")
             v1 = parts.get("v1", "")
-            data_id = data.get("data", {}).get("id", "")
+            data_id = data_tmp.get("data", {}).get("id", "")
             manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
             expected = hmac.new(
                 MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256
@@ -407,8 +476,7 @@ async def webhook_pagamento(request: Request):
 
     valor = float(pagamento.get("transaction_amount", 0))
 
-    # Identifica o plano pelo valor pago (mais confiável com assinaturas do MP)
-    # Fallback: tenta ler metadata se disponível
+    # Identifica o plano: 1º pelo metadata (mais confiável), depois pelo valor
     metadata = pagamento.get("metadata", {})
     if metadata.get("plano"):
         plano = metadata["plano"]
@@ -417,9 +485,17 @@ async def webhook_pagamento(request: Request):
     else:
         plano = "mensal"
 
-    # E-mail do comprador (sempre disponível no MP, ao contrário do telefone)
+    # ─── NOVO: pega o WhatsApp do external_reference (definido pela landing page) ───
+    # Fallback 1: metadata.whatsapp
+    # Fallback 2: campo phone do payer (pouco confiável)
+    external_ref = pagamento.get("external_reference", "")
+    whatsapp_meta = metadata.get("whatsapp", "")
+    telefone_payer = pagamento.get("payer", {}).get("phone", {}).get("number", "")
     email_payer = pagamento.get("payer", {}).get("email", "")
-    telefone_raw = pagamento.get("payer", {}).get("phone", {}).get("number", "")
+
+    telefone_raw = external_ref or whatsapp_meta or telefone_payer
+    print(f"📱 WhatsApp identificado: '{telefone_raw}' "
+          f"(external_ref='{external_ref}', meta='{whatsapp_meta}', payer='{telefone_payer}')")
 
     # Gera token e salva
     token = gerar_token()
@@ -430,7 +506,7 @@ async def webhook_pagamento(request: Request):
 
     print(f"✅ Token gerado: {token} | Plano: {plano_label} | Link: {link_acesso}")
 
-    # Se o comprador informou telefone, ativa automaticamente e manda mensagem
+    # Se encontrou o WhatsApp, ativa automaticamente e manda mensagem
     if telefone_raw:
         numero_limpo = ''.join(filter(str.isdigit, telefone_raw))
         if not numero_limpo.startswith("55"):
@@ -455,13 +531,12 @@ async def webhook_pagamento(request: Request):
                 f"Me envie o token acima para ativar seu acesso ao Porquim 🐷"
             )
 
-    # Se não conseguiu ativar automaticamente por falta de telefone,
-    # loga todas as infos para o admin localizar manualmente se necessário
+    # Se não encontrou WhatsApp de jeito nenhum, loga para o admin
     if not telefone_raw:
-        print(f"⚠️ Sem telefone no pagamento. Token gerado mas não enviado automaticamente.")
+        print(f"⚠️ Sem WhatsApp identificado no pagamento. Token gerado mas não enviado.")
         print(f"   Token: {token} | Plano: {plano_label} | Valor: R$ {valor:.2f}")
         print(f"   E-mail do comprador: {email_payer or 'não informado'}")
-        print(f"   Link de ativação: {link_acesso}")
+        print(f"   ➡ Envie manualmente: {link_acesso}")
 
     return {"ok": True, "token": token}
 
