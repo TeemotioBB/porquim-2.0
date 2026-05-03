@@ -464,7 +464,7 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
 
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0f1a10;color:#e2ebe4;border-radius:16px">
-      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐷</h1>
+      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐹</h1>
       <p style="color:#aaa;font-size:0.85rem;margin-bottom:28px">Seu assistente financeiro no WhatsApp</p>
 
       <h2 style="font-size:1.1rem;margin-bottom:12px">✅ Pagamento confirmado!</h2>
