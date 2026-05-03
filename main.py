@@ -912,7 +912,7 @@ async def evolution_webhook(request: Request, any: str = None):
     return {"status": "ok"}
 
 
-    @app.get("/testar-email")
+   @app.get("/testar-email")
 async def testar_email(email: str, senha: str = ""):
     if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
         raise HTTPException(status_code=403, detail="Acesso negado")
