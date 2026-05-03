@@ -843,7 +843,7 @@ async def evolution_webhook(request: Request, any: str = None):
                     "• 💰 Mensal: R$ 19,90\n"
                     "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
                     "Acesse nossa página para assinar:\n"
-                    "👉 https://SUA_LANDING_PAGE.com\n\n"
+                    "👉 meujohnny.com.br\n\n"
                     "_Após o pagamento, você receberá um token para ativar seu acesso aqui._"
                 )
             elif acesso["motivo"] == "expirado":
