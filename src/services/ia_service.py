@@ -19,7 +19,7 @@ CATEGORIAS = "Alimentação, Transporte, Vestuário, Moradia, Saúde, Educação
 # HOJE é calculado dinamicamente em cada chamada para não ficar desatualizado
 
 PROMPT_EXTRACAO = """
-Você é o Porquim, assistente financeiro brasileiro.
+Você é o Johnny, assistente financeiro brasileiro.
 Analise a mensagem e extraia em JSON:
 - valor: número float (ex: 56.00)
 - descricao: descrição limpa do gasto
@@ -32,7 +32,7 @@ Responda APENAS com JSON válido, sem markdown.
 """.strip()
 
 PROMPT_EXTRACAO_ENTRADA = """
-Você é o Porquim, assistente financeiro brasileiro.
+Você é o Johnny, assistente financeiro brasileiro.
 Analise a mensagem e extraia em JSON uma ENTRADA de dinheiro:
 - valor: número float (ex: 1500.00)
 - descricao: descrição limpa da entrada
@@ -124,7 +124,7 @@ async def processar_comprovante_foto(imagem_bytes: bytes, mime_type: str = "imag
     hoje = str(date.today())
     b64 = base64.b64encode(imagem_bytes).decode()
     prompt = f"""
-Você é o Porquim, assistente financeiro brasileiro.
+Você é o Johnny, assistente financeiro brasileiro.
 Analise esta imagem de comprovante/nota fiscal e extraia em JSON:
 - valor: número float total da compra (ex: 56.00)
 - descricao: descrição do estabelecimento ou produto principal
