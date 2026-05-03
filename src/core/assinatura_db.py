@@ -32,10 +32,10 @@ async def create_assinatura_tables():
                 usuario         VARCHAR(50) PRIMARY KEY,  -- remoteJid do WhatsApp
                 token           VARCHAR(20) NOT NULL REFERENCES tokens(token),
                 plano           VARCHAR(20) NOT NULL,
-                data_inicio     TIMESTAMP NOT NULL DEFAULT NOW(),
-                data_expiracao  TIMESTAMP NOT NULL,
+                data_inicio     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                data_expiracao  TIMESTAMPTZ NOT NULL,
                 status          VARCHAR(20) DEFAULT 'ativo',  -- 'ativo' | 'expirado'
-                criado_em       TIMESTAMP DEFAULT NOW()
+                criado_em       TIMESTAMPTZ DEFAULT NOW()
             );
 
             CREATE INDEX IF NOT EXISTS idx_assinaturas_status ON assinaturas(status);
@@ -79,21 +79,17 @@ async def ativar_assinatura(usuario: str, token: str) -> dict:
     Vincula um token ao número de WhatsApp do usuário.
     
     Retornos possíveis:
-      {"ok": True, "plano": "anual", "expira": <datetime>}
+      {"ok": True, "plano": "anual", "expira": <datetime>, "dias_extras": 5}
       {"ok": False, "motivo": "token_invalido"}
       {"ok": False, "motivo": "token_ja_usado"}
-      {"ok": False, "motivo": "ja_tem_assinatura_ativa"}
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
 
-        # 1. Verifica se o usuário já tem assinatura ativa
+        # 1. Busca assinatura existente (ativa ou expirada)
         assinatura = await conn.fetchrow(
             "SELECT * FROM assinaturas WHERE usuario = $1", usuario
         )
-        if assinatura and assinatura["status"] == "ativo":
-            if assinatura["data_expiracao"] > datetime.now(timezone.utc):
-                return {"ok": False, "motivo": "ja_tem_assinatura_ativa"}
 
         # 2. Busca o token
         tok = await conn.fetchrow(
@@ -105,10 +101,19 @@ async def ativar_assinatura(usuario: str, token: str) -> dict:
         if tok["usado"]:
             return {"ok": False, "motivo": "token_ja_usado"}
 
-        # 3. Calcula expiração
+        # 3. Calcula expiração — soma dias restantes se já tiver assinatura ativa
         agora = datetime.now(timezone.utc)
-        dias = 365 if tok["plano"] == "anual" else 30
-        expira = agora + timedelta(days=dias)
+        dias_novos = 365 if tok["plano"] == "anual" else 30
+
+        dias_restantes = 0
+        if assinatura:
+            expira_atual = assinatura["data_expiracao"]
+            if expira_atual.tzinfo is None:
+                expira_atual = expira_atual.replace(tzinfo=timezone.utc)
+            if expira_atual > agora:
+                dias_restantes = (expira_atual - agora).days
+
+        expira = agora + timedelta(days=dias_novos + dias_restantes)
 
         # 4. Marca token como usado e cria assinatura (transação)
         async with conn.transaction():
@@ -126,7 +131,7 @@ async def ativar_assinatura(usuario: str, token: str) -> dict:
                     status = 'ativo'
             """, usuario, tok["token"], tok["plano"], agora, expira)
 
-        return {"ok": True, "plano": tok["plano"], "expira": expira}
+        return {"ok": True, "plano": tok["plano"], "expira": expira, "dias_extras": dias_restantes}
 
 
 # ── Verificar se usuário tem acesso ──────────────────────────────────────────
