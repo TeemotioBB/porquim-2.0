@@ -48,12 +48,12 @@ async def create_assinatura_tables():
 
 def gerar_token() -> str:
     """
-    Gera um token único no formato PORQUIM-XXXXXXXX
-    Exemplo: PORQUIM-A3F9K2BV
+    Gera um token único no formato JOHNNY-XXXXXXXX
+    Exemplo: JOHNNY-A3F9K2BV
     """
     chars = string.ascii_uppercase + string.digits
     codigo = ''.join(secrets.choice(chars) for _ in range(8))
-    return f"PORQUIM-{codigo}"
+    return f"JOHNNY-{codigo}"
 
 
 # ── Salvar token após pagamento aprovado ──────────────────────────────────────
