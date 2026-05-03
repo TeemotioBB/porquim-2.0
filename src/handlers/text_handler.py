@@ -221,8 +221,12 @@ async def handle_text_message(message: dict) -> dict:
     texto_lower = texto.lower()
 
     # ── Ajuda ─────────────────────────────────────────────────────────────────
-    if texto_lower in ["oi", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
+    if texto_lower in ["oi", "oie", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
         return {"type": "text", "content": AJUDA}
+
+    # ── Suporte ───────────────────────────────────────────────────────────────
+    if texto_lower in ["suporte", "ajuda suporte", "falar com suporte", "atendimento"]:
+        return {"type": "text", "content": SUPORTE}
 
     # ── Resumo ────────────────────────────────────────────────────────────────
     if texto_lower.startswith("resumo") or texto_lower in ["relatorio", "relatório", "gastos", "ver gastos"]:
