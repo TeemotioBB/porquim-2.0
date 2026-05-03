@@ -368,7 +368,8 @@ async def webhook_pagamento(request: Request):
             parts = dict(p.split("=", 1) for p in signature.split(","))
             ts = parts.get("ts", "")
             v1 = parts.get("v1", "")
-            manifest = f"id:{request_id};request-id:{request_id};ts:{ts};"
+            data_id = data.get("data", {}).get("id", "")
+            manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
             expected = hmac.new(
                 MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256
             ).hexdigest()
@@ -404,11 +405,20 @@ async def webhook_pagamento(request: Request):
     if pagamento.get("status") != "approved":
         return {"ok": True}
 
-    # Lê o plano dos metadados
-    # Na sua landing page, ao criar o pagamento, passe: metadata={"plano": "mensal"} ou "anual"
-    metadata = pagamento.get("metadata", {})
-    plano = metadata.get("plano", "mensal")
     valor = float(pagamento.get("transaction_amount", 0))
+
+    # Identifica o plano pelo valor pago (mais confiável com assinaturas do MP)
+    # Fallback: tenta ler metadata se disponível
+    metadata = pagamento.get("metadata", {})
+    if metadata.get("plano"):
+        plano = metadata["plano"]
+    elif valor >= 60:
+        plano = "anual"
+    else:
+        plano = "mensal"
+
+    # E-mail do comprador (sempre disponível no MP, ao contrário do telefone)
+    email_payer = pagamento.get("payer", {}).get("email", "")
     telefone_raw = pagamento.get("payer", {}).get("phone", {}).get("number", "")
 
     # Gera token e salva
@@ -444,6 +454,14 @@ async def webhook_pagamento(request: Request):
                 f"Seu token de acesso: *{token}*\n\n"
                 f"Me envie o token acima para ativar seu acesso ao Porquim 🐷"
             )
+
+    # Se não conseguiu ativar automaticamente por falta de telefone,
+    # loga todas as infos para o admin localizar manualmente se necessário
+    if not telefone_raw:
+        print(f"⚠️ Sem telefone no pagamento. Token gerado mas não enviado automaticamente.")
+        print(f"   Token: {token} | Plano: {plano_label} | Valor: R$ {valor:.2f}")
+        print(f"   E-mail do comprador: {email_payer or 'não informado'}")
+        print(f"   Link de ativação: {link_acesso}")
 
     return {"ok": True, "token": token}
 
@@ -540,7 +558,7 @@ async def evolution_webhook(request: Request, any: str = None):
                 f"Renove agora para continuar usando o Porquim 🐷:\n"
                 f"• 💰 Mensal: R$ 19,90\n"
                 f"• 🎉 Anual: R$ 67,00\n\n"
-                f"👉 https://SUA_LANDING_PAGE.com"
+                f"👉 https://maycon.app"
             )
         return {"status": "ok"}
     # ── Fim do guard ──────────────────────────────────────────────────────────
