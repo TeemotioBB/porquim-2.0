@@ -151,3 +151,66 @@ Responda APENAS com JSON válido, sem markdown.
     dados = json.loads(raw)
     dados["hashtag"] = _gerar_hashtag(dados.get("descricao", "foto"))
     return dados
+
+
+async def classificar_foto_comprovante(imagem_bytes: bytes, mime_type: str = "image/jpeg") -> str:
+    """
+    Analisa a foto e retorna "GASTO" ou "ENTRADA".
+    GASTO  = comprovante de pagamento, nota fiscal, boleto pago, Pix enviado.
+    ENTRADA = comprovante de recebimento, Pix recebido, transferência recebida, extrato positivo.
+    """
+    b64 = base64.b64encode(imagem_bytes).decode()
+    prompt = (
+        "Olhe esta imagem. É um comprovante de PAGAMENTO (dinheiro saindo) "
+        "ou de RECEBIMENTO (dinheiro entrando)?\n\n"
+        "Responda APENAS com uma palavra: GASTO ou ENTRADA."
+    )
+    try:
+        resp = await openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+                ]
+            }],
+            temperature=0,
+            max_tokens=5
+        )
+        resultado = resp.choices[0].message.content.strip().upper()
+        return resultado if resultado in ("GASTO", "ENTRADA") else "GASTO"
+    except Exception as e:
+        print(f"⚠️ Erro ao classificar foto: {e}")
+        return "GASTO"
+
+
+async def processar_recebimento_foto(imagem_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    """Lê comprovante de recebimento e extrai dados como entrada de dinheiro."""
+    hoje = str(date.today())
+    b64 = base64.b64encode(imagem_bytes).decode()
+    prompt = f"""Você é o Johnny, assistente financeiro brasileiro.
+Analise esta imagem de comprovante de RECEBIMENTO e extraia em JSON:
+- valor: número float total recebido (ex: 500.00)
+- descricao: descrição da origem (ex: "Pix recebido", "Transferência recebida", nome do pagador se visível)
+- categoria: uma de (Salário, Freelance, Investimento, Presente, Reembolso, Outros)
+- data: data no formato DD-MM-YYYY (use {hoje} se não visível)
+
+Responda APENAS com JSON válido, sem markdown."""
+    resp = await openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64}"}}
+            ]
+        }],
+        temperature=0.2,
+        max_tokens=500
+    )
+    raw = resp.choices[0].message.content.strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    dados = json.loads(raw)
+    dados["hashtag"] = _gerar_hashtag(dados.get("descricao", "foto-entrada"))
+    return dados
