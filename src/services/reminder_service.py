@@ -186,12 +186,16 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
     dados = await _parsear_lembrete(texto)
 
     if not dados or "horario_iso" not in dados:
+        # Tenta extrair o assunto para personalizar a resposta
+        assunto = ""
+        if dados and dados.get("mensagem"):
+            assunto = f" de *{dados['mensagem']}*"
         return (
-            "❌ Não consegui entender o horário do lembrete.\n\n"
-            "Tente assim:\n"
-            "_'Me lembre da reunião hoje às 14:00'_\n"
-            "_'Lembra de tomar o remédio amanhã às 8h'_\n"
-            "_'Reunião amanhã 12:00'_"
+            f"⏰ Me diz o horário{assunto}!\n\n"
+            "Exemplos:\n"
+            "_'Lembra de pagar o boleto amanhã às 10h'_\n"
+            "_'Me avisa da reunião sexta às 14:00'_\n"
+            "_'Me lembre do remédio hoje às 8h'_"
         )
 
     try:
