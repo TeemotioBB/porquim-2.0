@@ -618,9 +618,26 @@ async def webhook_pagamento(request: Request):
         if numero_limpo.startswith("55") and len(numero_limpo) > 11:
             numero_limpo = numero_limpo[2:]  # remove 55 se vier com DDI
 
-        jid = f"{numero_limpo}@s.whatsapp.net"
+        # Gera variações com e sem o nono dígito para garantir ativação
+        variacoes_numero = [numero_limpo]
+        if len(numero_limpo) == 10:  # sem o 9 → adiciona versão com 9
+            com9 = numero_limpo[:2] + "9" + numero_limpo[2:]
+            variacoes_numero.append(com9)
+        elif len(numero_limpo) == 11:  # com o 9 → adiciona versão sem 9
+            sem9 = numero_limpo[:2] + numero_limpo[3:]
+            variacoes_numero.append(sem9)
 
-        resultado = await ativar_assinatura(jid, token)
+        # Tenta ativar com cada variação até uma funcionar
+        resultado = None
+        jid = None
+        for num in variacoes_numero:
+            jid = f"{num}@s.whatsapp.net"
+            resultado = await ativar_assinatura(jid, token)
+            if resultado["ok"]:
+                print(f"✅ Ativação com número: {num}")
+                break
+            print(f"⚠️ Ativação falhou para {num}, tentando variação...")
+
         if resultado["ok"]:
             dias = resultado.get("expira") and (resultado["expira"] - datetime.now(timezone.utc)).days
             dias_extras = resultado.get("dias_extras", 0)
