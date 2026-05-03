@@ -1,8 +1,12 @@
 import base64
 import httpx
-from src.services.ia_service import processar_comprovante_foto
+from src.services.ia_service import (
+    processar_comprovante_foto,
+    classificar_foto_comprovante,
+    processar_recebimento_foto,
+)
 from src.services.report_service import verificar_limite_pos_gasto
-from src.core.database import salvar_gasto
+from src.core.database import salvar_gasto, salvar_entrada, salvar_memoria
 from src.core.config import settings
 
 CARD_FOTO = """✅ *Comprovante Lido!* 📷
@@ -17,6 +21,17 @@ CARD_FOTO = """✅ *Comprovante Lido!* 📷
 _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
 _Para editar responda: *editar*_"""
+
+CARD_FOTO_ENTRADA = """✅ *Recebimento Registrado!* 📷
+
+📍 {descricao}
+💵 R$ {valor:.2f}
+🏷️ {categoria}
+📅 {data}
+🔖 {hashtag}
+
+_Salvo com sucesso!_ 🎉
+_Para remover esta entrada responda: *remover entrada*_"""
 
 
 async def _baixar_imagem_evolution(msg_data: dict) -> tuple[bytes | None, str]:
@@ -50,22 +65,44 @@ async def handle_image_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
         return {"type": "text", "content": "❌ Não consegui acessar a imagem. Tente enviar novamente."}
 
     try:
-        dados = await processar_comprovante_foto(image_bytes, mime_type)
-        gasto_id = await salvar_gasto(numero, dados, fonte="foto")
-        ultimo_gasto[numero] = gasto_id
+        # Classifica se é gasto ou entrada antes de processar
+        tipo = await classificar_foto_comprovante(image_bytes, mime_type)
 
-        alerta = await verificar_limite_pos_gasto(numero) or ""
+        if tipo == "ENTRADA":
+            # Comprovante de recebimento
+            dados = await processar_recebimento_foto(image_bytes, mime_type)
+            entrada_id = await salvar_entrada(numero, dados, fonte="foto")
+            await salvar_memoria(numero, ultima_entrada_id=entrada_id)
 
-        card = CARD_FOTO.format(
-            descricao=dados["descricao"],
-            valor=float(dados["valor"]),
-            categoria=dados["categoria"],
-            forma_pagamento=dados["forma_pagamento"],
-            data=dados["data"],
-            hashtag=dados["hashtag"],
-            alerta=alerta
-        )
-        return {"type": "text", "content": card}
+            card = CARD_FOTO_ENTRADA.format(
+                descricao=dados["descricao"],
+                valor=float(dados["valor"]),
+                categoria=dados.get("categoria", "Outros"),
+                data=dados["data"],
+                hashtag=dados["hashtag"],
+            )
+            return {"type": "text", "content": card}
+
+        else:
+            # Comprovante de pagamento (gasto)
+            dados = await processar_comprovante_foto(image_bytes, mime_type)
+            gasto_id = await salvar_gasto(numero, dados, fonte="foto")
+            ultimo_gasto[numero] = gasto_id
+            await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
+
+            alerta = await verificar_limite_pos_gasto(numero) or ""
+
+            card = CARD_FOTO.format(
+                descricao=dados["descricao"],
+                valor=float(dados["valor"]),
+                categoria=dados["categoria"],
+                forma_pagamento=dados["forma_pagamento"],
+                data=dados["data"],
+                hashtag=dados["hashtag"],
+                alerta=alerta,
+            )
+            return {"type": "text", "content": card}
+
     except Exception as e:
         print(f"❌ Erro ao processar imagem: {e}")
         return {"type": "text", "content": "😅 Não consegui ler o comprovante. Verifique se:\n• A foto está nítida e bem iluminada\n• O valor total está visível\n\nOu envie o gasto em texto: _'iFood 45 cartão'_"}
