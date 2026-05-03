@@ -50,6 +50,14 @@ Digite: *suporte*
 
 Um hábito simples que muda tudo 💚"""
 
+SUPORTE = """🙋 *Precisa de ajuda?*
+
+Fala comigo diretamente! Respondo o mais rápido possível 😊
+
+👉 wa.me/5531991316890
+
+_Horário de atendimento: seg a sex, 9h às 18h_"""
+
 CARD_GASTO = """✅ *Gasto Registrado!*
 
 📍 {descricao}
