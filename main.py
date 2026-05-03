@@ -629,8 +629,7 @@ async def webhook_pagamento(request: Request):
                 f"✅ Pagamento confirmado! Bem-vindo ao Johnny 🐹\n\n"
                 f"📋 Plano: {plano_label}\n"
                 f"📅 Válido por {dias} dias{extra_msg}\n\n"
-                f"Pode começar agora! Me manda um gasto:\n"
-                f"Ex: _gastei 25 reais no ifood_"
+                f"Agora para começar digite *ajuda* e entenda todas as funcionalidades!"
             )
         else:
             # Token gerado mas ativação automática falhou — manda o token para ativar manualmente
