@@ -631,10 +631,13 @@ async def webhook_pagamento(request: Request):
         resultado = None
         jid = None
         for num in variacoes_numero:
+            # Salva no banco sem DDI, mas manda mensagem com DDI 55
             jid = f"{num}@s.whatsapp.net"
+            jid_com55 = f"55{num}@s.whatsapp.net" if not num.startswith("55") else f"{num}@s.whatsapp.net"
             resultado = await ativar_assinatura(jid, token)
             if resultado["ok"]:
                 print(f"✅ Ativação com número: {num}")
+                jid = jid_com55  # usa o jid com 55 para enviar mensagem
                 break
             print(f"⚠️ Ativação falhou para {num}, tentando variação...")
 
