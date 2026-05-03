@@ -43,6 +43,11 @@ MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
 MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "")
 BOT_WHATSAPP_NUMBER = os.environ.get("BOT_WHATSAPP_NUMBER", "5511999999999")
 
+# Números admin — acesso ilimitado sem assinatura (sem DDI 55, padrão do banco)
+# Defina no Railway em Variables: ADMIN_NUMBERS=31999999999,11988887777
+_admin_env = os.environ.get("ADMIN_NUMBERS", "")
+ADMIN_NUMBERS: set = set(n.strip() for n in _admin_env.split(",") if n.strip())
+
 
 # ── Emoji por categoria ──────────────────────────────────────────────────────
 EMOJI_CAT = {
@@ -617,27 +622,30 @@ async def evolution_webhook(request: Request, any: str = None):
         return {"status": "ok"}
 
     # Verifica acesso antes de processar qualquer mensagem
-    acesso = await verificar_acesso(remote_jid)
-    if not acesso["tem_acesso"]:
-        if acesso["motivo"] == "sem_assinatura":
-            await _enviar_resposta(remote_jid,
-                "👋 Olá! O *Porquim* é um assistente financeiro via WhatsApp.\n\n"
-                "Para usar, você precisa de uma assinatura:\n"
-                "• 💰 Mensal: R$ 19,90\n"
-                "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
-                "Acesse nossa página para assinar:\n"
-                "👉 https://SUA_LANDING_PAGE.com\n\n"
-                "_Após o pagamento, você receberá um token para ativar seu acesso aqui._"
-            )
-        elif acesso["motivo"] == "expirado":
-            await _enviar_resposta(remote_jid,
-                f"⚠️ Sua assinatura expirou.\n\n"
-                f"Renove agora para continuar usando o Porquim 🐷:\n"
-                f"• 💰 Mensal: R$ 19,90\n"
-                f"• 🎉 Anual: R$ 67,00\n\n"
-                f"👉 https://maycon.app"
-            )
-        return {"status": "ok"}
+    # Números admin pulam a verificação de assinatura
+    numero_limpo = remote_jid.replace("@s.whatsapp.net", "")
+    if numero_limpo not in ADMIN_NUMBERS:
+        acesso = await verificar_acesso(remote_jid)
+        if not acesso["tem_acesso"]:
+            if acesso["motivo"] == "sem_assinatura":
+                await _enviar_resposta(remote_jid,
+                    "👋 Olá! O *Porquim* é um assistente financeiro via WhatsApp.\n\n"
+                    "Para usar, você precisa de uma assinatura:\n"
+                    "• 💰 Mensal: R$ 19,90\n"
+                    "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
+                    "Acesse nossa página para assinar:\n"
+                    "👉 https://SUA_LANDING_PAGE.com\n\n"
+                    "_Após o pagamento, você receberá um token para ativar seu acesso aqui._"
+                )
+            elif acesso["motivo"] == "expirado":
+                await _enviar_resposta(remote_jid,
+                    f"⚠️ Sua assinatura expirou.\n\n"
+                    f"Renove agora para continuar usando o Porquim 🐷:\n"
+                    f"• 💰 Mensal: R$ 19,90\n"
+                    f"• 🎉 Anual: R$ 67,00\n\n"
+                    f"👉 https://maycon.app"
+                )
+            return {"status": "ok"}
     # ── Fim do guard ──────────────────────────────────────────────────────────
 
     response = None
