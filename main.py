@@ -383,6 +383,7 @@ async def reset_usuario(usuario: str, senha: str = ""):
 class PreferenciaBody(BaseModel):
     plano: str          # "mensal" ou "anual"
     whatsapp: str       # ex: "5531999999999" ou "31999999999"
+    email: str = ""     # email do comprador para fallback
 
 @app.post("/criar-preferencia")
 async def criar_preferencia(body: PreferenciaBody):
@@ -419,7 +420,7 @@ async def criar_preferencia(body: PreferenciaBody):
                         "currency_id": "BRL"
                     }],
                     "external_reference": numero_limpo,   # ← número WA do comprador (sem DDI 55)
-                    "metadata": {"plano": plano, "whatsapp": numero_limpo},
+                    "metadata": {"plano": plano, "whatsapp": numero_limpo, "email": body.email},
                     "back_urls": {
                         "success": "https://wa.me/" + BOT_WHATSAPP_NUMBER + "?text=Oi%2C+acabei+de+pagar!",
                         "failure": "",
@@ -440,12 +441,74 @@ async def criar_preferencia(body: PreferenciaBody):
         raise HTTPException(status_code=500, detail="Link de pagamento não retornado pelo MP")
 
     print(f"✅ Preferência criada | link={init_point}")
-    return {"link": init_point, "plano": plano, "whatsapp": numero_limpo}
+    return {"link": init_point, "plano": plano, "whatsapp": numero_limpo, "email": body.email}
 
 
 # ════════════════════════════════════════════════════════════════════
 # WEBHOOK MERCADO PAGO — geração de token após pagamento aprovado
 # ════════════════════════════════════════════════════════════════════
+
+async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_acesso: str):
+    """
+    Envia email com o link de ativação do WhatsApp.
+    Usa a API do Resend (resend.com) — grátis até 3000 emails/mês.
+    Configure RESEND_API_KEY no Railway.
+    """
+    RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+    EMAIL_FROM = os.environ.get("EMAIL_FROM", "noreply@seudominio.com.br")
+
+    if not RESEND_API_KEY:
+        print(f"⚠️ RESEND_API_KEY não configurada — email não enviado para {email}")
+        print(f"   Link de ativação: {link_acesso}")
+        return
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0f1a10;color:#e2ebe4;border-radius:16px">
+      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐷</h1>
+      <p style="color:#aaa;font-size:0.85rem;margin-bottom:28px">Seu assistente financeiro no WhatsApp</p>
+
+      <h2 style="font-size:1.1rem;margin-bottom:12px">✅ Pagamento confirmado!</h2>
+      <p style="color:#bbb;line-height:1.6;margin-bottom:24px">
+        Obrigado pela sua assinatura do plano <strong style="color:#00e676">{plano_label}</strong>.
+        Clique no botão abaixo para ativar seu acesso no WhatsApp:
+      </p>
+
+      <a href="{link_acesso}" style="display:inline-block;background:#00e676;color:#000;padding:14px 28px;border-radius:100px;text-decoration:none;font-weight:700;font-size:1rem;margin-bottom:24px">
+        📱 Ativar acesso no WhatsApp
+      </a>
+
+      <p style="color:#888;font-size:0.8rem;line-height:1.6;margin-bottom:8px">
+        Ou abra o WhatsApp e envie esta mensagem para o bot:
+      </p>
+      <div style="background:#1a2e1c;border:1px solid rgba(0,230,118,0.2);border-radius:10px;padding:12px 16px;font-family:monospace;font-size:1rem;color:#00e676;letter-spacing:0.05em;margin-bottom:24px">
+        {token}
+      </div>
+
+      <p style="color:#666;font-size:0.72rem">
+        Se você não realizou esta compra, ignore este email.
+      </p>
+    </div>
+    """
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "from": f"Porquim <{EMAIL_FROM}>",
+                    "to": [email],
+                    "subject": f"✅ Seu acesso ao Porquim está pronto!",
+                    "html": html_body
+                }
+            )
+            if resp.status_code in [200, 201]:
+                print(f"📧 Email enviado para {email}")
+            else:
+                print(f"⚠️ Erro ao enviar email: {resp.status_code} — {resp.text}")
+    except Exception as e:
+        print(f"❌ Erro ao enviar email: {e}")
+
 
 @app.post("/webhook/pagamento")
 async def webhook_pagamento(request: Request):
@@ -520,7 +583,9 @@ async def webhook_pagamento(request: Request):
     external_ref = pagamento.get("external_reference", "")
     whatsapp_meta = metadata.get("whatsapp", "")
     telefone_payer = pagamento.get("payer", {}).get("phone", {}).get("number", "")
-    email_payer = pagamento.get("payer", {}).get("email", "")
+    # Prioridade de email: metadata (digitado pelo usuário) > payer do MP
+    email_meta = metadata.get("email", "")
+    email_payer = email_meta or pagamento.get("payer", {}).get("email", "")
 
     telefone_raw = external_ref or whatsapp_meta or telefone_payer
     print(f"📱 WhatsApp identificado: '{telefone_raw}' "
@@ -534,6 +599,15 @@ async def webhook_pagamento(request: Request):
     plano_label = "Anual 🎉" if plano == "anual" else "Mensal"
 
     print(f"✅ Token gerado: {token} | Plano: {plano_label} | Link: {link_acesso}")
+
+    # Envia email com link de ativação (funciona mesmo se o cliente nunca interagiu com o bot)
+    if email_payer and "@" in email_payer and "testuser" not in email_payer.lower():
+        await _enviar_email_ativacao(
+            email=email_payer,
+            token=token,
+            plano_label=plano_label,
+            link_acesso=link_acesso
+        )
 
     # Se encontrou o WhatsApp, ativa automaticamente e manda mensagem
     if telefone_raw:
