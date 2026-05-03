@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Admin — Assinantes</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --green: #00e676; --green2: #00c853; --green-dim: rgba(0,230,118,0.09); --green-border: rgba(0,230,118,0.20);
+  --red: #ff5252; --red-dim: rgba(255,82,82,0.09); --red-border: rgba(255,82,82,0.20);
+  --warn: #ffab40; --warn-dim: rgba(255,171,64,0.12); --warn-border: rgba(255,171,64,0.28);
+  --bg: #060809; --card: rgba(255,255,255,0.03); --border: rgba(255,255,255,0.07);
+  --text: #e2ebe4; --muted: rgba(226,235,228,0.45);
+  --font: 'Outfit', sans-serif; --mono: 'DM Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); -webkit-font-smoothing: antialiased; }
+
+/* LOGIN */
+#login { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; background: var(--bg); z-index: 100; }
+#login h1 { font-size: 1.6rem; font-weight: 800; color: var(--green); letter-spacing: -0.04em; margin-bottom: 8px; }
+#login input { width: 100%; max-width: 320px; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 16px; color: var(--text); font-family: var(--mono); font-size: 0.9rem; outline: none; }
+#login input:focus { border-color: var(--green); }
+#login button { width: 100%; max-width: 320px; background: linear-gradient(135deg, var(--green), var(--green2)); color: #000; border: none; border-radius: 12px; padding: 13px; font-family: var(--font); font-weight: 700; font-size: 0.9rem; cursor: pointer; }
+#login .err { font-size: 0.78rem; color: var(--red); }
+
+/* APP */
+#app { display: none; padding: 20px 16px 40px; max-width: 680px; margin: 0 auto; }
+#app.visible { display: block; }
+
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.header h1 { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.04em; }
+.header h1 span { color: var(--green); }
+.btn-sair { background: none; border: 1px solid var(--border); color: var(--muted); padding: 7px 14px; border-radius: 10px; font-family: var(--font); font-size: 0.72rem; cursor: pointer; }
+.btn-sair:hover { border-color: var(--red); color: var(--red); }
+.btn-refresh { background: var(--green-dim); border: 1px solid var(--green-border); color: var(--green); padding: 7px 14px; border-radius: 10px; font-family: var(--font); font-size: 0.72rem; cursor: pointer; font-weight: 600; }
+
+/* STATS */
+.stats { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 12px; text-align: center; }
+.stat-val { font-family: var(--mono); font-size: 1.4rem; font-weight: 500; }
+.stat-val.green { color: var(--green); }
+.stat-val.red { color: var(--red); }
+.stat-val.warn { color: var(--warn); }
+.stat-lbl { font-size: 0.62rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+
+/* FILTROS */
+.filtros { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.filtro-btn { padding: 7px 14px; border-radius: 100px; border: 1px solid var(--border); background: var(--card); color: var(--muted); font-family: var(--font); font-size: 0.72rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.filtro-btn.active { background: var(--green-dim); border-color: var(--green-border); color: var(--green); }
+.filtro-btn.red.active { background: var(--red-dim); border-color: var(--red-border); color: var(--red); }
+.filtro-btn.warn.active { background: var(--warn-dim); border-color: var(--warn-border); color: var(--warn); }
+
+/* LISTA */
+.lista { display: flex; flex-direction: column; gap: 8px; }
+.item { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; }
+.item.expirado { border-color: var(--red-border); background: var(--red-dim); }
+.item.vence_em_breve { border-color: var(--warn-border); background: var(--warn-dim); }
+.item.ok { border-color: var(--green-border); }
+
+.item-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.item-num { font-family: var(--mono); font-size: 0.9rem; font-weight: 500; color: var(--text); }
+.item-badge { font-size: 0.6rem; font-weight: 700; padding: 3px 10px; border-radius: 100px; letter-spacing: 0.06em; text-transform: uppercase; }
+.badge-ativo { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+.badge-vence { background: var(--warn-dim); color: var(--warn); border: 1px solid var(--warn-border); }
+.badge-expirado { background: var(--red-dim); color: var(--red); border: 1px solid var(--red-border); }
+
+.item-info { display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.72rem; color: var(--muted); margin-bottom: 10px; }
+.item-info span strong { color: var(--text); font-weight: 500; }
+
+.item-actions { display: flex; gap: 8px; }
+.btn-wa { display: flex; align-items: center; gap: 6px; background: rgba(37,211,102,0.12); border: 1px solid rgba(37,211,102,0.25); color: #25D366; padding: 8px 14px; border-radius: 10px; font-family: var(--font); font-size: 0.75rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.2s; }
+.btn-wa:hover { background: rgba(37,211,102,0.22); }
+.btn-copiar { background: var(--card); border: 1px solid var(--border); color: var(--muted); padding: 8px 14px; border-radius: 10px; font-family: var(--font); font-size: 0.75rem; cursor: pointer; transition: all 0.2s; }
+.btn-copiar:hover { border-color: var(--green-border); color: var(--green); }
+
+.empty { text-align: center; padding: 48px 20px; color: var(--muted); font-size: 0.85rem; }
+
+.loader { display: flex; justify-content: center; padding: 48px; gap: 6px; }
+.ld { width: 5px; height: 5px; border-radius: 50%; background: var(--green); animation: bounce 1.2s ease-in-out infinite; }
+.ld:nth-child(2) { animation-delay: 0.15s; }
+.ld:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:.3} 30%{transform:translateY(-7px);opacity:1} }
+
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(10px); background: #111e14; border: 1px solid var(--green-border); color: var(--text); padding: 10px 20px; border-radius: 100px; font-size: 0.8rem; opacity: 0; transition: all 0.25s; pointer-events: none; z-index: 999; white-space: nowrap; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <h1>⚙️ Admin</h1>
+  <input type="password" id="senha-input" placeholder="Senha admin" autocomplete="current-password">
+  <button onclick="entrar()">Entrar</button>
+  <div class="err" id="login-err"></div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="header">
+    <h1>Assinantes <span id="total-badge"></span></h1>
+    <div style="display:flex;gap:8px">
+      <button class="btn-refresh" onclick="carregar()">↻ Atualizar</button>
+      <button class="btn-sair" onclick="sair()">Sair</button>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="filtros">
+    <button class="filtro-btn active" onclick="setFiltro('todos', this)">Todos</button>
+    <button class="filtro-btn active" onclick="setFiltro('ativo', this)">✓ Ativos</button>
+    <button class="filtro-btn warn" onclick="setFiltro('vence_em_breve', this)">⚡ Vence em 7 dias</button>
+    <button class="filtro-btn red" onclick="setFiltro('expirado', this)">✕ Expirados</button>
+  </div>
+
+  <div class="lista" id="lista">
+    <div class="loader"><div class="ld"></div><div class="ld"></div><div class="ld"></div></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API_URL = 'https://johnny-20-production.up.railway.app';
+let senha = '';
+let dados = [];
+let filtroAtual = 'todos';
+
+// Login
+document.getElementById('senha-input').addEventListener('keydown', e => { if (e.key === 'Enter') entrar(); });
+
+function entrar() {
+  const s = document.getElementById('senha-input').value.trim();
+  if (!s) return;
+  senha = s;
+  document.getElementById('login').style.display = 'none';
+  document.getElementById('app').classList.add('visible');
+  carregar();
+}
+
+function sair() {
+  senha = '';
+  document.getElementById('login').style.display = 'flex';
+  document.getElementById('app').classList.remove('visible');
+  document.getElementById('senha-input').value = '';
+}
+
+async function carregar() {
+  document.getElementById('lista').innerHTML = '<div class="loader"><div class="ld"></div><div class="ld"></div><div class="ld"></div></div>';
+  try {
+    const r = await fetch(`${API_URL}/admin/assinantes?senha=${encodeURIComponent(senha)}`);
+    if (r.status === 403) {
+      document.getElementById('login-err').textContent = '❌ Senha incorreta';
+      sair(); return;
+    }
+    dados = await r.json();
+    renderStats();
+    renderLista();
+  } catch(e) {
+    document.getElementById('lista').innerHTML = '<div class="empty">Erro ao carregar. Verifique sua conexão.</div>';
+  }
+}
+
+function renderStats() {
+  const total = dados.length;
+  const ativos = dados.filter(d => d.alerta === 'ok').length;
+  const vencendo = dados.filter(d => d.alerta === 'vence_em_breve').length;
+  const expirados = dados.filter(d => d.alerta === 'expirado').length;
+  const mrr = dados.filter(d => d.status === 'ativo').reduce((s, d) => s + (d.plano === 'mensal' ? d.valor_pago : d.valor_pago / 12), 0);
+
+  document.getElementById('total-badge').textContent = `(${total})`;
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-val green">${ativos}</div><div class="stat-lbl">Ativos</div></div>
+    <div class="stat"><div class="stat-val warn">${vencendo}</div><div class="stat-lbl">Vence em 7d</div></div>
+    <div class="stat"><div class="stat-val red">${expirados}</div><div class="stat-lbl">Expirados</div></div>
+    <div class="stat"><div class="stat-val green">R$${mrr.toFixed(0)}</div><div class="stat-lbl">MRR est.</div></div>
+  `;
+}
+
+function setFiltro(f, el) {
+  filtroAtual = f;
+  document.querySelectorAll('.filtro-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderLista();
+}
+
+function renderLista() {
+  let lista = dados;
+  if (filtroAtual !== 'todos') lista = dados.filter(d => d.alerta === filtroAtual || d.status === filtroAtual);
+
+  if (!lista.length) {
+    document.getElementById('lista').innerHTML = '<div class="empty">Nenhum assinante nesta categoria.</div>';
+    return;
+  }
+
+  document.getElementById('lista').innerHTML = lista.map(d => {
+    const badgeClass = d.alerta === 'expirado' ? 'badge-expirado' : d.alerta === 'vence_em_breve' ? 'badge-vence' : 'badge-ativo';
+    const badgeText = d.alerta === 'expirado' ? '✕ Expirado' : d.alerta === 'vence_em_breve' ? `⚡ Vence em ${d.dias_restantes}d` : `✓ ${d.dias_restantes}d restantes`;
+    const itemClass = d.alerta === 'expirado' ? 'expirado' : d.alerta === 'vence_em_breve' ? 'vence_em_breve' : 'ok';
+    const planoLabel = d.plano === 'anual' ? '🎉 Anual' : '💰 Mensal';
+
+    return `<div class="item ${itemClass}">
+      <div class="item-top">
+        <div class="item-num">${d.usuario}</div>
+        <span class="item-badge ${badgeClass}">${badgeText}</span>
+      </div>
+      <div class="item-info">
+        <span><strong>${planoLabel}</strong></span>
+        <span>Início: <strong>${d.data_inicio}</strong></span>
+        <span>Expira: <strong>${d.data_expiracao}</strong></span>
+        <span>Valor: <strong>R$ ${d.valor_pago.toFixed(2).replace('.',',')}</strong></span>
+      </div>
+      <div class="item-actions">
+        <a class="btn-wa" href="${d.whatsapp_link}" target="_blank">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+          Chamar no WhatsApp
+        </a>
+        <button class="btn-copiar" onclick="copiar('${d.usuario}')">Copiar número</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function copiar(num) {
+  navigator.clipboard.writeText(num).then(() => showToast('✅ Número copiado!'));
+}
+
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
