@@ -1,13 +1,17 @@
 from src.core.config import settings
 import httpx
 import uvicorn
+import json
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime, timezone
 from src.services.reminder_service import iniciar_background_lembretes
-
+import hashlib
+import hmac
+import os
 
 from src.core.database import (
     get_pool,
@@ -20,9 +24,24 @@ from src.core.database import (
     total_entrada_mes,
     deletar_entrada,
 )
+
+# ── Sistema de Pagamento ──────────────────────────────────────────────────────
+from src.core.assinatura_db import (
+    create_assinatura_tables,
+    salvar_token,
+    ativar_assinatura,
+    verificar_acesso,
+    gerar_token,
+)
+
 from src.handlers.text_handler import handle_text_message
 from src.handlers.audio_handler import handle_audio_message
 from src.handlers.image_handler import handle_image_message
+
+# Variáveis do Mercado Pago (adicione no Railway em Variables)
+MP_ACCESS_TOKEN = os.environ.get("MP_ACCESS_TOKEN", "")
+MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "")
+BOT_WHATSAPP_NUMBER = os.environ.get("BOT_WHATSAPP_NUMBER", "5511999999999")
 
 
 # ── Emoji por categoria ──────────────────────────────────────────────────────
@@ -49,6 +68,7 @@ def emoji_entrada_para(cat: str) -> str:
 async def lifespan(app: FastAPI):
     print("🐘 Conectando ao PostgreSQL...")
     await get_pool()
+    await create_assinatura_tables()  # ← NOVO: cria tabelas de assinatura
     print("✅ Banco conectado e tabelas criadas!")
     app.state.processed_ids = set()
     iniciar_background_lembretes(app, _enviar_resposta)
@@ -267,7 +287,6 @@ async def evolucao(usuario: str):
     MESES_SHORT = ["", "Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
                    "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
 
-    # Merge gastos e entradas por ano/mes
     gastos_map = {(r["ano"], r["mes"]): round(r["total"], 2) for r in rows_gastos}
     entradas_map = {(r["ano"], r["mes"]): round(r["total"], 2) for r in rows_entradas}
     all_keys = sorted(set(list(gastos_map.keys()) + list(entradas_map.keys())))
@@ -328,6 +347,108 @@ async def reset_usuario(usuario: str, senha: str = ""):
 
 
 # ════════════════════════════════════════════════════════════════════
+# WEBHOOK MERCADO PAGO — geração de token após pagamento aprovado
+# ════════════════════════════════════════════════════════════════════
+
+@app.post("/webhook/pagamento")
+async def webhook_pagamento(request: Request):
+    """
+    Recebe notificações do Mercado Pago quando um pagamento é aprovado.
+    Configure em: https://www.mercadopago.com.br/developers/panel/webhooks
+    URL: https://SEU_APP.railway.app/webhook/pagamento
+    Evento: payment
+    """
+    body_bytes = await request.body()
+
+    # Verificação de assinatura (segurança)
+    if MP_WEBHOOK_SECRET:
+        signature = request.headers.get("x-signature", "")
+        request_id = request.headers.get("x-request-id", "")
+        try:
+            parts = dict(p.split("=", 1) for p in signature.split(","))
+            ts = parts.get("ts", "")
+            v1 = parts.get("v1", "")
+            manifest = f"id:{request_id};request-id:{request_id};ts:{ts};"
+            expected = hmac.new(
+                MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256
+            ).hexdigest()
+            if not hmac.compare_digest(expected, v1):
+                print("⚠️ Webhook MP: assinatura inválida")
+                return {"ok": False}
+        except Exception as e:
+            print(f"⚠️ Erro na verificação MP: {e}")
+
+    data = json.loads(body_bytes)
+
+    if data.get("type") != "payment":
+        return {"ok": True}
+
+    payment_id = str(data.get("data", {}).get("id", ""))
+    if not payment_id:
+        return {"ok": True}
+
+    # Busca detalhes do pagamento
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://api.mercadopago.com/v1/payments/{payment_id}",
+                headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"}
+            )
+            pagamento = resp.json()
+    except Exception as e:
+        print(f"❌ Erro ao buscar pagamento no MP: {e}")
+        return {"ok": False}
+
+    print(f"💳 Pagamento {payment_id}: status={pagamento.get('status')}")
+
+    if pagamento.get("status") != "approved":
+        return {"ok": True}
+
+    # Lê o plano dos metadados
+    # Na sua landing page, ao criar o pagamento, passe: metadata={"plano": "mensal"} ou "anual"
+    metadata = pagamento.get("metadata", {})
+    plano = metadata.get("plano", "mensal")
+    valor = float(pagamento.get("transaction_amount", 0))
+    telefone_raw = pagamento.get("payer", {}).get("phone", {}).get("number", "")
+
+    # Gera token e salva
+    token = gerar_token()
+    await salvar_token(token=token, plano=plano, valor_pago=valor, payment_id=payment_id)
+
+    link_acesso = f"https://wa.me/{BOT_WHATSAPP_NUMBER}?text={token}"
+    plano_label = "Anual 🎉" if plano == "anual" else "Mensal"
+
+    print(f"✅ Token gerado: {token} | Plano: {plano_label} | Link: {link_acesso}")
+
+    # Se o comprador informou telefone, ativa automaticamente e manda mensagem
+    if telefone_raw:
+        numero_limpo = ''.join(filter(str.isdigit, telefone_raw))
+        if not numero_limpo.startswith("55"):
+            numero_limpo = f"55{numero_limpo}"
+        jid = f"{numero_limpo}@s.whatsapp.net"
+
+        resultado = await ativar_assinatura(jid, token)
+        if resultado["ok"]:
+            dias = resultado.get("expira") and (resultado["expira"] - datetime.now(timezone.utc)).days
+            await _enviar_resposta(jid,
+                f"✅ Pagamento confirmado! Bem-vindo ao Porquim 🐷\n\n"
+                f"📋 Plano: {plano_label}\n"
+                f"📅 Válido por {dias} dias\n\n"
+                f"Pode começar agora! Me manda um gasto:\n"
+                f"Ex: _gastei 25 reais no ifood_"
+            )
+        else:
+            # Token gerado mas ativação automática falhou — manda o token para ativar manualmente
+            await _enviar_resposta(jid,
+                f"✅ Pagamento confirmado!\n\n"
+                f"Seu token de acesso: *{token}*\n\n"
+                f"Me envie o token acima para ativar seu acesso ao Porquim 🐷"
+            )
+
+    return {"ok": True, "token": token}
+
+
+# ════════════════════════════════════════════════════════════════════
 # WEBHOOK WHATSAPP
 # ════════════════════════════════════════════════════════════════════
 
@@ -364,9 +485,68 @@ async def evolution_webhook(request: Request, any: str = None):
     if not remote_jid or not msg:
         return {"status": "ok"}
 
+    text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
+
+    # ── Guard de acesso ──────────────────────────────────────────────────────
+    # Se o usuário mandou um token de ativação
+    if text_body and text_body.strip().upper().startswith("PORQUIM-"):
+        token_enviado = text_body.strip().upper()
+        resultado = await ativar_assinatura(remote_jid, token_enviado)
+
+        if resultado["ok"]:
+            plano = resultado["plano"]
+            expira = resultado["expira"]
+            dias = (expira - datetime.now(timezone.utc)).days
+            plano_label = "Anual 🎉" if plano == "anual" else "Mensal"
+            await _enviar_resposta(remote_jid,
+                f"✅ Acesso ativado com sucesso!\n\n"
+                f"📋 Plano: {plano_label}\n"
+                f"📅 Válido por {dias} dias\n\n"
+                f"Seja bem-vindo ao Porquim 🐷\n"
+                f"Me manda um gasto pra começar! Ex: _gastei 15 reais no mercado_"
+            )
+        elif resultado["motivo"] == "token_invalido":
+            await _enviar_resposta(remote_jid,
+                "❌ Token inválido. Verifique se digitou corretamente.\n"
+                "O token tem o formato *PORQUIM-XXXXXXXX*"
+            )
+        elif resultado["motivo"] == "token_ja_usado":
+            await _enviar_resposta(remote_jid,
+                "❌ Este token já foi utilizado por outro número.\n"
+                "Se você acredita que houve um erro, entre em contato."
+            )
+        elif resultado["motivo"] == "ja_tem_assinatura_ativa":
+            await _enviar_resposta(remote_jid,
+                "✅ Você já tem uma assinatura ativa! Pode usar o bot normalmente 🐷"
+            )
+        return {"status": "ok"}
+
+    # Verifica acesso antes de processar qualquer mensagem
+    acesso = await verificar_acesso(remote_jid)
+    if not acesso["tem_acesso"]:
+        if acesso["motivo"] == "sem_assinatura":
+            await _enviar_resposta(remote_jid,
+                "👋 Olá! O *Porquim* é um assistente financeiro via WhatsApp.\n\n"
+                "Para usar, você precisa de uma assinatura:\n"
+                "• 💰 Mensal: R$ 19,90\n"
+                "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
+                "Acesse nossa página para assinar:\n"
+                "👉 https://SUA_LANDING_PAGE.com\n\n"
+                "_Após o pagamento, você receberá um token para ativar seu acesso aqui._"
+            )
+        elif acesso["motivo"] == "expirado":
+            await _enviar_resposta(remote_jid,
+                f"⚠️ Sua assinatura expirou.\n\n"
+                f"Renove agora para continuar usando o Porquim 🐷:\n"
+                f"• 💰 Mensal: R$ 19,90\n"
+                f"• 🎉 Anual: R$ 67,00\n\n"
+                f"👉 https://SUA_LANDING_PAGE.com"
+            )
+        return {"status": "ok"}
+    # ── Fim do guard ──────────────────────────────────────────────────────────
+
     response = None
 
-    text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
     if text_body:
         print(f"✅ Texto: '{text_body}'")
         response = await handle_text_message({
