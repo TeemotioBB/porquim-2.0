@@ -464,7 +464,7 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
 
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0f1a10;color:#e2ebe4;border-radius:16px">
-      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐹</h1>
+      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐷</h1>
       <p style="color:#aaa;font-size:0.85rem;margin-bottom:28px">Seu assistente financeiro no WhatsApp</p>
 
       <h2 style="font-size:1.1rem;margin-bottom:12px">✅ Pagamento confirmado!</h2>
@@ -670,6 +670,55 @@ async def testar_pagamento(payment_id: str):
         "email": pagamento.get("payer", {}).get("email"),
         "metadata": pagamento.get("metadata"),
     }
+
+
+# ════════════════════════════════════════════════════════════════════
+# PAINEL ADMIN — assinantes
+# ════════════════════════════════════════════════════════════════════
+
+@app.get("/admin/assinantes")
+async def admin_assinantes(senha: str = ""):
+    """Retorna todos os assinantes com status e dias restantes."""
+    if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT
+                a.usuario,
+                a.plano,
+                a.data_inicio,
+                a.data_expiracao,
+                a.status,
+                t.valor_pago,
+                t.payment_id
+            FROM assinaturas a
+            JOIN tokens t ON a.token = t.token
+            ORDER BY a.data_expiracao ASC
+        """)
+    agora = datetime.now(timezone.utc)
+    resultado = []
+    for r in rows:
+        expira = r["data_expiracao"]
+        if expira.tzinfo is None:
+            expira = expira.replace(tzinfo=timezone.utc)
+        dias = (expira - agora).days
+        # Formata número para link wa.me
+        num = r["usuario"].replace("@s.whatsapp.net", "")
+        # Tenta adicionar 55 se não tiver para link wa.me
+        num_wa = num if num.startswith("55") else f"55{num}"
+        resultado.append({
+            "usuario": num,
+            "whatsapp_link": f"https://wa.me/{num_wa}",
+            "plano": r["plano"],
+            "valor_pago": float(r["valor_pago"]),
+            "data_inicio": r["data_inicio"].strftime("%d/%m/%Y"),
+            "data_expiracao": expira.strftime("%d/%m/%Y"),
+            "dias_restantes": dias,
+            "status": "ativo" if dias > 0 else "expirado",
+            "alerta": "vence_em_breve" if 0 < dias <= 7 else ("expirado" if dias <= 0 else "ok")
+        })
+    return resultado
 
 
 # ════════════════════════════════════════════════════════════════════
