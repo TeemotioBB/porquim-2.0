@@ -11,7 +11,8 @@ from src.services.reminder_service import (
 )
 from src.core.database import (
     salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id,
-    salvar_entrada, deletar_entrada, buscar_entrada_por_id
+    salvar_entrada, deletar_entrada, buscar_entrada_por_id,
+    salvar_memoria, buscar_memoria, limpar_memoria_gasto, limpar_memoria_entrada
 )
 from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
@@ -123,11 +124,9 @@ MESES_NOMES = {
     "novembro": 11, "dezembro": 12
 }
 
-# Memória em RAM: último gasto/entrada por usuário e lista do resumo
-_ultimo_gasto: dict[str, int] = {}
-_ultima_entrada: dict[str, int] = {}
+# Resumo em RAM (só para a sessão de edição/remoção por número)
 _resumo_gastos: dict[str, list] = {}
-_lote_gastos: dict[str, list] = {}  # IDs do último lote agrupado
+# último gasto/entrada e lote agora persistidos no banco (memoria_usuario)
 
 
 # ─── Detecção de intenção: GASTO ─────────────────────────────────────────────
@@ -293,7 +292,8 @@ async def handle_text_message(message: dict) -> dict:
 
     # ── Remover última entrada: "remover entrada" ─────────────────────────────
     if texto_lower == "remover entrada":
-        entrada_id = _ultima_entrada.get(numero)
+        mem = await buscar_memoria(numero)
+        entrada_id = mem["ultima_entrada_id"]
         if not entrada_id:
             return {"type": "text", "content": "❌ Nenhuma entrada recente para remover."}
         e = await buscar_entrada_por_id(entrada_id, numero)
@@ -301,14 +301,14 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": "❌ Entrada não encontrada ou já foi removida."}
         ok = await deletar_entrada(entrada_id, numero)
         if ok:
-            _ultima_entrada.pop(numero, None)
+            await limpar_memoria_entrada(numero)
             return {"type": "text", "content": f"🗑️ *Entrada removida!*\n\n_{e['descricao']} · R$ {float(e['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
     # ── Remover último gasto: "remover" ───────────────────────────────────────
     if texto_lower == "remover":
-        # Se veio de um lote, remove todos de uma vez
-        lote = _lote_gastos.pop(numero, [])
+        mem = await buscar_memoria(numero)
+        lote = mem["lote_gastos_ids"]
         if lote:
             removidos = []
             for gid in lote:
@@ -317,12 +317,12 @@ async def handle_text_message(message: dict) -> dict:
                     ok = await deletar_gasto(gid, numero)
                     if ok:
                         removidos.append(f"_{g['descricao']} · R$ {float(g['valor']):.2f}_")
-            _ultimo_gasto.pop(numero, None)
+            await limpar_memoria_gasto(numero)
             if removidos:
                 return {"type": "text", "content": "🗑️ *LOTE REMOVIDO!*"}
             return {"type": "text", "content": "❌ Não consegui remover os gastos. Tente novamente."}
 
-        gasto_id = _ultimo_gasto.get(numero)
+        gasto_id = mem["ultimo_gasto_id"]
         if not gasto_id:
             return {"type": "text", "content": "❌ Nenhum gasto recente para remover.\nUse *resumo* para ver seus gastos e remover pelo número."}
         g = await buscar_gasto_por_id(gasto_id, numero)
@@ -330,7 +330,7 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": "❌ Gasto não encontrado ou já foi removido."}
         ok = await deletar_gasto(gasto_id, numero)
         if ok:
-            _ultimo_gasto.pop(numero, None)
+            await limpar_memoria_gasto(numero)
             return {"type": "text", "content": f"🗑️ *Gasto removido!*\n\n_{g['descricao']} · R$ {float(g['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
@@ -356,7 +356,8 @@ async def handle_text_message(message: dict) -> dict:
     # ── Editar último gasto: "editar" ou "editar Uber 50 cartão" ─────────────
     match_edit = re.match(r"^editar\s+(.+)$", texto_lower)
     if match_edit or texto_lower == "editar":
-        gasto_id = _ultimo_gasto.get(numero)
+        mem = await buscar_memoria(numero)
+        gasto_id = mem["ultimo_gasto_id"]
         if not gasto_id:
             return {"type": "text", "content": "❌ Nenhum gasto recente para editar.\nUse *resumo* e depois *editar 2 Uber 50 cartão*."}
         if texto_lower == "editar":
@@ -419,7 +420,7 @@ async def handle_text_message(message: dict) -> dict:
         try:
             dados = await processar_entrada_texto(texto)
             entrada_id = await salvar_entrada(numero, dados, fonte="texto")
-            _ultima_entrada[numero] = entrada_id
+            await salvar_memoria(numero, ultima_entrada_id=entrada_id)
             card = CARD_ENTRADA.format(
                 descricao=dados["descricao"],
                 valor=float(dados["valor"]),
@@ -470,8 +471,7 @@ async def handle_text_message(message: dict) -> dict:
                     falhas.append(f"❌ Não entendi: _{linha}_")
 
             if ids_registrados:
-                _ultimo_gasto[numero] = ids_registrados[-1]
-                _lote_gastos[numero] = list(ids_registrados)
+                await salvar_memoria(numero, ultimo_gasto_id=ids_registrados[-1], lote_ids=ids_registrados)
 
             partes = cards[:]
             if falhas:
@@ -482,12 +482,12 @@ async def handle_text_message(message: dict) -> dict:
     intencao = await _detectar_intencao(texto)
 
     if intencao != "GASTO":
-        return {"type": "text", "content": AJUDA}
+        return {"type": "text", "content": "😅 Não entendi. Tenta assim: _'iFood 45 cartão'_ ou _'Uber 22 pix'_\n\nDigite *ajuda* para ver todos os comandos."}
 
     try:
         dados = await processar_gasto_texto(texto)
         gasto_id = await salvar_gasto(numero, dados, fonte="texto")
-        _ultimo_gasto[numero] = gasto_id
+        await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
 
         alerta = await verificar_limite_pos_gasto(numero) or ""
 
