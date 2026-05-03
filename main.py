@@ -78,10 +78,10 @@ async def lifespan(app: FastAPI):
     app.state.processed_ids = set()
     iniciar_background_lembretes(app, _enviar_resposta)
     yield
-    print("👋 Encerrando Porquim...")
+    print("👋 Encerrando Johnny...")
 
 
-app = FastAPI(title="Porquim 2.0 🐷", lifespan=lifespan)
+app = FastAPI(title="Johnny 🐹", lifespan=lifespan)
 
 # Estado compartilhado: último gasto por usuário (para remover/editar após áudio/imagem)
 _ultimo_gasto_global: dict[str, int] = {}
@@ -130,7 +130,7 @@ async def _enviar_resposta(remote_jid: str, texto: str):
 
 @app.get("/")
 async def health():
-    return {"status": "Porquim 2.0 🐷 online!"}
+    return {"status": "Johnny 🐹 online!"}
 
 
 @app.get("/api/verificar/{usuario}")
@@ -414,7 +414,7 @@ async def criar_preferencia(body: PreferenciaBody):
                 headers={"Authorization": f"Bearer {MP_ACCESS_TOKEN}"},
                 json={
                     "items": [{
-                        "title": f"Porquim – Plano {plano.capitalize()}",
+                        "title": f"Johnny – Plano {plano.capitalize()}",
                         "quantity": 1,
                         "unit_price": valor,
                         "currency_id": "BRL"
@@ -427,7 +427,7 @@ async def criar_preferencia(body: PreferenciaBody):
                         "pending": ""
                     },
                     "auto_return": "approved",
-                    "statement_descriptor": "PORQUIM"
+                    "statement_descriptor": "JOHNNY"
                 }
             )
             dados = resp.json()
@@ -464,7 +464,7 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
 
     html_body = f"""
     <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0f1a10;color:#e2ebe4;border-radius:16px">
-      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Porquim 🐷</h1>
+      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Johnny 🐹</h1>
       <p style="color:#aaa;font-size:0.85rem;margin-bottom:28px">Seu assistente financeiro no WhatsApp</p>
 
       <h2 style="font-size:1.1rem;margin-bottom:12px">✅ Pagamento confirmado!</h2>
@@ -496,9 +496,9 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
                 json={
-                    "from": f"Porquim <{EMAIL_FROM}>",
+                    "from": f"Johnny <{EMAIL_FROM}>",
                     "to": [email],
-                    "subject": f"✅ Seu acesso ao Porquim está pronto!",
+                    "subject": f"✅ Seu acesso ao Johnny está pronto!",
                     "html": html_body
                 }
             )
@@ -626,7 +626,7 @@ async def webhook_pagamento(request: Request):
             dias_extras = resultado.get("dias_extras", 0)
             extra_msg = f"\n⏭ _+{dias_extras} dias do ciclo anterior foram somados!_" if dias_extras > 0 else ""
             await _enviar_resposta(jid,
-                f"✅ Pagamento confirmado! Bem-vindo ao Porquim 🐷\n\n"
+                f"✅ Pagamento confirmado! Bem-vindo ao Johnny 🐹\n\n"
                 f"📋 Plano: {plano_label}\n"
                 f"📅 Válido por {dias} dias{extra_msg}\n\n"
                 f"Pode começar agora! Me manda um gasto:\n"
@@ -637,7 +637,7 @@ async def webhook_pagamento(request: Request):
             await _enviar_resposta(jid,
                 f"✅ Pagamento confirmado!\n\n"
                 f"Seu token de acesso: *{token}*\n\n"
-                f"Me envie o token acima para ativar seu acesso ao Porquim 🐷"
+                f"Me envie o token acima para ativar seu acesso ao Johnny 🐹"
             )
 
     # Se não encontrou WhatsApp de jeito nenhum, loga para o admin
@@ -768,7 +768,7 @@ async def evolution_webhook(request: Request, any: str = None):
 
     # ── Guard de acesso ──────────────────────────────────────────────────────
     # Se o usuário mandou um token de ativação
-    if text_body and text_body.strip().upper().startswith("PORQUIM-"):
+    if text_body and text_body.strip().upper().startswith("JOHNNY-"):
         token_enviado = text_body.strip().upper()
         resultado = await ativar_assinatura(remote_jid, token_enviado)
 
@@ -783,13 +783,13 @@ async def evolution_webhook(request: Request, any: str = None):
                 f"✅ Acesso ativado com sucesso!\n\n"
                 f"📋 Plano: {plano_label}\n"
                 f"📅 Válido por {dias} dias{extra_msg}\n\n"
-                f"Seja bem-vindo ao Porquim 🐷\n"
+                f"Seja bem-vindo ao Johnny 🐹\n"
                 f"Me manda um gasto pra começar! Ex: _gastei 15 reais no mercado_"
             )
         elif resultado["motivo"] == "token_invalido":
             await _enviar_resposta(remote_jid,
                 "❌ Token inválido. Verifique se digitou corretamente.\n"
-                "O token tem o formato *PORQUIM-XXXXXXXX*"
+                "O token tem o formato *JOHNNY-XXXXXXXX*"
             )
         elif resultado["motivo"] == "token_ja_usado":
             await _enviar_resposta(remote_jid,
@@ -838,7 +838,7 @@ async def evolution_webhook(request: Request, any: str = None):
         if not acesso["tem_acesso"]:
             if acesso["motivo"] == "sem_assinatura":
                 await _enviar_resposta(remote_jid,
-                    "👋 Olá! O *Porquim* é um assistente financeiro via WhatsApp.\n\n"
+                    "👋 Olá! O *Johnny* é um assistente financeiro via WhatsApp.\n\n"
                     "Para usar, você precisa de uma assinatura:\n"
                     "• 💰 Mensal: R$ 19,90\n"
                     "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
@@ -849,7 +849,7 @@ async def evolution_webhook(request: Request, any: str = None):
             elif acesso["motivo"] == "expirado":
                 await _enviar_resposta(remote_jid,
                     f"⚠️ Sua assinatura expirou.\n\n"
-                    f"Renove agora para continuar usando o Porquim 🐷:\n"
+                    f"Renove agora para continuar usando o Johnny 🐹:\n"
                     f"• 💰 Mensal: R$ 19,90\n"
                     f"• 🎉 Anual: R$ 67,00\n\n"
                     f"👉 https://maycon.app"
