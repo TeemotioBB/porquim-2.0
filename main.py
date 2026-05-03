@@ -912,5 +912,18 @@ async def evolution_webhook(request: Request, any: str = None):
     return {"status": "ok"}
 
 
+    @app.get("/testar-email")
+async def testar_email(email: str, senha: str = ""):
+    if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
+        raise HTTPException(status_code=403, detail="Acesso negado")
+    await _enviar_email_ativacao(
+        email=email,
+        token="JOHNNY-TESTE123",
+        plano_label="Mensal",
+        link_acesso="https://wa.me/5531984686982?text=JOHNNY-TESTE123"
+    )
+    return {"ok": True, "email": email}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
