@@ -578,15 +578,7 @@ async def webhook_pagamento(request: Request):
 # ════════════════════════════════════════════════════════════════════
 
 @app.get("/testar-pagamento/{payment_id}")
-async def testar_pagamento(payment_id: str, senha: str = ""):
-    if senha != settings.RESET_SECRET:
-        raise HTTPException(status_code=403, detail="Senha incorreta")
-    # Monta o mesmo payload que o MP mandaria
-    from fastapi import Request as Req
-    import json
-    fake_body = json.dumps({"type": "payment", "data": {"id": payment_id}}).encode()
-    
-    # Busca o pagamento diretamente
+async def testar_pagamento(payment_id: str):
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -596,9 +588,14 @@ async def testar_pagamento(payment_id: str, senha: str = ""):
             pagamento = resp.json()
     except Exception as e:
         return {"erro": str(e)}
-    
-    print(f"🧪 [TESTE] Pagamento {payment_id}: {pagamento}")
-    return {"pagamento": pagamento}
+    print(f"🧪 [TESTE] Pagamento {payment_id}: status={pagamento.get('status')} | external_reference={pagamento.get('external_reference')}")
+    return {
+        "status": pagamento.get("status"),
+        "external_reference": pagamento.get("external_reference"),
+        "valor": pagamento.get("transaction_amount"),
+        "email": pagamento.get("payer", {}).get("email"),
+        "metadata": pagamento.get("metadata"),
+    }
 
 
 # ════════════════════════════════════════════════════════════════════
