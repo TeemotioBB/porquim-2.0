@@ -63,6 +63,15 @@ async def _create_tables():
             CREATE INDEX IF NOT EXISTS idx_lembretes_usuario ON lembretes(usuario);
             CREATE INDEX IF NOT EXISTS idx_lembretes_horario ON lembretes(horario);
             CREATE INDEX IF NOT EXISTS idx_lembretes_enviado ON lembretes(enviado);
+
+            -- Tabela de memória persistente (último gasto/entrada por usuário)
+            CREATE TABLE IF NOT EXISTS memoria_usuario (
+                usuario        VARCHAR(50) PRIMARY KEY,
+                ultimo_gasto_id   INTEGER,
+                ultima_entrada_id INTEGER,
+                lote_gastos_ids   TEXT,  -- IDs separados por vírgula
+                atualizado_em  TIMESTAMP DEFAULT NOW()
+            );
         """)
 
 def _parse_date(s: str) -> _date:
@@ -226,3 +235,46 @@ async def deletar_entrada(entrada_id: int, usuario: str) -> bool:
             "DELETE FROM entradas WHERE id=$1 AND usuario=$2", entrada_id, usuario
         )
         return result == "DELETE 1"
+
+# ── Memória persistente ──────────────────────────────────────────────────────
+
+async def salvar_memoria(usuario: str, ultimo_gasto_id: int = None, ultima_entrada_id: int = None, lote_ids: list = None):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        lote_str = ",".join(str(i) for i in lote_ids) if lote_ids else None
+        await conn.execute("""
+            INSERT INTO memoria_usuario (usuario, ultimo_gasto_id, ultima_entrada_id, lote_gastos_ids, atualizado_em)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (usuario) DO UPDATE SET
+                ultimo_gasto_id   = COALESCE($2, memoria_usuario.ultimo_gasto_id),
+                ultima_entrada_id = COALESCE($3, memoria_usuario.ultima_entrada_id),
+                lote_gastos_ids   = COALESCE($4, memoria_usuario.lote_gastos_ids),
+                atualizado_em     = NOW()
+        """, usuario, ultimo_gasto_id, ultima_entrada_id, lote_str)
+
+async def buscar_memoria(usuario: str) -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM memoria_usuario WHERE usuario=$1", usuario)
+        if not row:
+            return {"ultimo_gasto_id": None, "ultima_entrada_id": None, "lote_gastos_ids": []}
+        lote = [int(i) for i in row["lote_gastos_ids"].split(",") if i] if row["lote_gastos_ids"] else []
+        return {
+            "ultimo_gasto_id": row["ultimo_gasto_id"],
+            "ultima_entrada_id": row["ultima_entrada_id"],
+            "lote_gastos_ids": lote
+        }
+
+async def limpar_memoria_gasto(usuario: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE memoria_usuario SET ultimo_gasto_id=NULL, lote_gastos_ids=NULL WHERE usuario=$1
+        """, usuario)
+
+async def limpar_memoria_entrada(usuario: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE memoria_usuario SET ultima_entrada_id=NULL WHERE usuario=$1
+        """, usuario)
