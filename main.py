@@ -623,12 +623,39 @@ async def evolution_webhook(request: Request, any: str = None):
 
     # Verifica acesso antes de processar qualquer mensagem
     # Números admin pulam a verificação de assinatura
-    # remote_jid vem como "5531999999999@s.whatsapp.net" (com DDI 55)
-    # ADMIN_NUMBERS pode estar cadastrado com ou sem o 55 — verifica os dois
+    # Gera todas as variações possíveis do número para comparar com ADMIN_NUMBERS:
+    # com/sem DDI 55, com/sem o nono dígito (MG e outros estados)
     _jid_num = remote_jid.replace("@s.whatsapp.net", "")
     _jid_sem55 = _jid_num[2:] if _jid_num.startswith("55") and len(_jid_num) > 11 else _jid_num
-    _is_admin = _jid_num in ADMIN_NUMBERS or _jid_sem55 in ADMIN_NUMBERS
-    print(f"🔍 [ADMIN] jid={_jid_num} | sem55={_jid_sem55} | admins={ADMIN_NUMBERS} | is_admin={_is_admin}")
+
+    def _variantes(n: str) -> set:
+        v = {n}
+        # adiciona/remove 55
+        if n.startswith("55"):
+            v.add(n[2:])
+        else:
+            v.add("55" + n)
+        # para cada variante, adiciona/remove o 9 após o DDD (2 dígitos)
+        extras = set()
+        for x in v:
+            digits = x.lstrip("55") if x.startswith("55") else x
+            # remove 55 prefix para trabalhar com DDD+número
+            base = x[2:] if x.startswith("55") else x
+            if len(base) == 11 and base[2] == "9":      # tem o 9 → remove
+                extras.add(x[:len(x)-9] + base[3:] if x.startswith("55") else base[:2] + base[3:])
+                sem9 = base[:2] + base[3:]
+                extras.add(sem9)
+                extras.add("55" + sem9)
+            elif len(base) == 10:                         # sem o 9 → adiciona
+                com9 = base[:2] + "9" + base[2:]
+                extras.add(com9)
+                extras.add("55" + com9)
+        v |= extras
+        return v
+
+    _variacoes = _variantes(_jid_num)
+    _is_admin = bool(_variacoes & ADMIN_NUMBERS)
+    print(f"🔍 [ADMIN] jid={_jid_num} | variações={_variacoes} | is_admin={_is_admin}")
     if not _is_admin:
         acesso = await verificar_acesso(remote_jid)
         if not acesso["tem_acesso"]:
