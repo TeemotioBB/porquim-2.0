@@ -623,8 +623,13 @@ async def evolution_webhook(request: Request, any: str = None):
 
     # Verifica acesso antes de processar qualquer mensagem
     # Números admin pulam a verificação de assinatura
-    numero_limpo = remote_jid.replace("@s.whatsapp.net", "")
-    if numero_limpo not in ADMIN_NUMBERS:
+    # remote_jid vem como "5531999999999@s.whatsapp.net" (com DDI 55)
+    # ADMIN_NUMBERS pode estar cadastrado com ou sem o 55 — verifica os dois
+    _jid_num = remote_jid.replace("@s.whatsapp.net", "")
+    _jid_sem55 = _jid_num[2:] if _jid_num.startswith("55") and len(_jid_num) > 11 else _jid_num
+    _is_admin = _jid_num in ADMIN_NUMBERS or _jid_sem55 in ADMIN_NUMBERS
+    print(f"🔍 [ADMIN] jid={_jid_num} | sem55={_jid_sem55} | admins={ADMIN_NUMBERS} | is_admin={_is_admin}")
+    if not _is_admin:
         acesso = await verificar_acesso(remote_jid)
         if not acesso["tem_acesso"]:
             if acesso["motivo"] == "sem_assinatura":
