@@ -462,34 +462,57 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
         print(f"   Link de ativação: {link_acesso}")
         return
 
-    html_body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#0f1a10;color:#e2ebe4;border-radius:16px">
-      <h1 style="color:#00e676;font-size:1.8rem;margin-bottom:4px">Johnny 🐹</h1>
-      <p style="color:#aaa;font-size:0.85rem;margin-bottom:28px">Seu assistente financeiro no WhatsApp</p>
-
-      <h2 style="font-size:1.1rem;margin-bottom:12px">✅ Pagamento confirmado!</h2>
-      <p style="color:#bbb;line-height:1.6;margin-bottom:24px">
-        Obrigado pela sua assinatura do plano <strong style="color:#00e676">{plano_label}</strong>.
-        Clique no botão abaixo para ativar seu acesso no WhatsApp:
-      </p>
-
-      <a href="{link_acesso}" style="display:inline-block;background:#00e676;color:#000;padding:14px 28px;border-radius:100px;text-decoration:none;font-weight:700;font-size:1rem;margin-bottom:24px">
-        📱 Ativar acesso no WhatsApp
-      </a>
-
-      <p style="color:#888;font-size:0.8rem;line-height:1.6;margin-bottom:8px">
-        Ou abra o WhatsApp e envie esta mensagem para o bot:
-      </p>
-      <div style="background:#1a2e1c;border:1px solid rgba(0,230,118,0.2);border-radius:10px;padding:12px 16px;font-family:monospace;font-size:1rem;color:#00e676;letter-spacing:0.05em;margin-bottom:24px">
-        {token}
-      </div>
-
-      <p style="color:#666;font-size:0.72rem">
-        Se você não realizou esta compra, ignore este email.
-      </p>
-    </div>
-    """
-
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body style="margin:0;padding:0;background:#060809;font-family:'DM Sans',Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#060809;min-height:100vh;">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;">
+          <tr>
+            <td style="padding-bottom:32px;">
+              <span style="font-size:1.6rem;font-weight:900;color:#1DB954;letter-spacing:-0.03em;">Johnny</span>
+              <span style="font-size:1.4rem;">🐹</span>
+              <p style="margin:4px 0 0;font-size:0.8rem;color:rgba(240,245,241,0.4);">Seu assistente financeiro no WhatsApp</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:linear-gradient(135deg,rgba(29,185,84,0.08),rgba(29,185,84,0.02));border:1px solid rgba(29,185,84,0.2);border-radius:20px;padding:32px 28px;">
+              <div style="display:inline-block;background:rgba(29,185,84,0.15);border:1px solid rgba(29,185,84,0.3);border-radius:100px;padding:6px 14px;margin-bottom:20px;">
+                <span style="font-size:0.72rem;font-weight:500;color:#1DB954;letter-spacing:0.06em;text-transform:uppercase;">✅ Pagamento confirmado</span>
+              </div>
+              <h1 style="margin:0 0 8px;font-size:1.6rem;font-weight:700;color:#f0f5f1;line-height:1.2;letter-spacing:-0.03em;">Bem-vindo ao Johnny!</h1>
+              <p style="margin:0 0 24px;font-size:0.9rem;color:rgba(240,245,241,0.5);line-height:1.6;">
+                Sua assinatura do plano <strong style="color:#1DB954;">{plano_label}</strong> está ativa.<br>
+                Clique no botão abaixo para ativar seu acesso no WhatsApp:
+              </p>
+              <a href="{link_acesso}" style="display:block;background:#1DB954;color:#000;text-align:center;padding:16px 28px;border-radius:100px;text-decoration:none;font-weight:700;font-size:1rem;margin-bottom:28px;">📱 Ativar acesso no WhatsApp</a>
+              <div style="height:1px;background:rgba(255,255,255,0.06);margin-bottom:24px;"></div>
+              <p style="margin:0 0 10px;font-size:0.75rem;color:rgba(240,245,241,0.4);">Ou abra o WhatsApp e envie este código para o bot:</p>
+              <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(29,185,84,0.25);border-radius:12px;padding:14px 18px;text-align:center;">
+                <span style="font-family:monospace;font-size:1.2rem;font-weight:700;color:#1DB954;letter-spacing:0.1em;">{token}</span>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-top:24px;text-align:center;">
+              <p style="margin:0;font-size:0.7rem;color:rgba(240,245,241,0.25);line-height:1.6;">
+                Se você não realizou esta compra, ignore este email.<br>
+                © 2026 Johnny · <a href="https://meujohnny.com.br" style="color:rgba(29,185,84,0.5);text-decoration:none;">meujohnny.com.br</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
