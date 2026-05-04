@@ -90,7 +90,8 @@ async def handle_image_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             ultimo_gasto[numero] = gasto_id
             await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
 
-            alerta = await verificar_limite_pos_gasto(numero) or ""
+            # Passa categoria pra checar limite por categoria também
+            alerta = await verificar_limite_pos_gasto(numero, dados.get("categoria")) or ""
 
             card = CARD_FOTO.format(
                 descricao=dados["descricao"],
