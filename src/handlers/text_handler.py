@@ -12,7 +12,8 @@ from src.services.reminder_service import (
 from src.core.database import (
     salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id,
     salvar_entrada, deletar_entrada, buscar_entrada_por_id,
-    salvar_memoria, buscar_memoria, limpar_memoria_gasto, limpar_memoria_entrada
+    salvar_memoria, buscar_memoria, limpar_memoria_gasto, limpar_memoria_entrada,
+    salvar_intencao_pendente, limpar_intencao_pendente
 )
 from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
@@ -34,37 +35,21 @@ _"Uber 27"_ ou _"Almoço 35 cartão"_
 (pode ser áudio ou foto também, eu entendo tudinho 👀)
 
 💰 *Entrou dinheiro?*
-É só me contar que eu registro:
-_"Salário 3000"_ ou _"Recebi 500 de freelance"_
+_"Salário 3000"_ ou _"Recebi 500"_
 
 📊 *Quer ver como tá indo?*
 Digite: *resumo*
 ou acompanhe tudo no seu dashboard:
 👉 https://dashboard-porquim-theta.vercel.app
 
-🎯 *Quer definir um limite de gastos?*
-Digite: *Limite*
-e te aviso quando estiver chegando no teto 🔔
-
-🗓️ *Precisa de um lembrete?*
+🔔 *Também te ajudo com lembretes!*
 Ex: _"Tenho reunião hoje 14h"_
 e eu te aviso na hora certa ⏰
-
-Para ver seus lembretes agendados:
-Digite: *meus lembretes*
 
 ❓ *Precisou de ajuda?*
 Digite: *suporte*
 
 Um hábito simples que muda tudo 💚"""
-
-SUPORTE = """🙋 *Precisa de ajuda?*
-
-Fala comigo diretamente! Respondo o mais rápido possível 😊
-
-👉 wa.me/5531991316890
-
-_Horário de atendimento: seg a sex, 9h às 18h_"""
 
 CARD_GASTO = """✅ *Gasto Registrado!*
 
@@ -237,12 +222,25 @@ async def handle_text_message(message: dict) -> dict:
     texto_lower = texto.lower()
 
     # ── Ajuda ─────────────────────────────────────────────────────────────────
-    if texto_lower in ["oi", "oie", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
+    if texto_lower in ["oi", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
         return {"type": "text", "content": AJUDA}
 
-    # ── Suporte ───────────────────────────────────────────────────────────────
-    if texto_lower in ["suporte", "ajuda suporte", "falar com suporte", "atendimento"]:
-        return {"type": "text", "content": SUPORTE}
+    # ── Confirmação de intenção pendente ──────────────────────────────────────
+    _confirmacoes = ["sim", "pode", "confirma", "isso", "quero", "vai", "ok", "bora", "yes", "s"]
+    _cancelamentos = ["não", "nao", "cancela", "esquece", "deixa", "no"]
+
+    if texto_lower in _confirmacoes or texto_lower in _cancelamentos:
+        mem = await buscar_memoria(numero)
+        intencao = mem.get("intencao_pendente")
+        if intencao:
+            await limpar_intencao_pendente(numero)
+            if texto_lower in _cancelamentos:
+                return {"type": "text", "content": "Ok, cancelado! 😊 Pode mandar outro comando quando quiser."}
+            if intencao.startswith("limite:"):
+                valor = float(intencao.split(":")[1])
+                return {"type": "text", "content": await definir_limite(numero, valor)}
+
+
 
     # ── Resumo ────────────────────────────────────────────────────────────────
     if texto_lower.startswith("resumo") or texto_lower in ["relatorio", "relatório", "gastos", "ver gastos"]:
@@ -351,15 +349,6 @@ async def handle_text_message(message: dict) -> dict:
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar Uber 55 pix*"}
 
     # ── Limite ────────────────────────────────────────────────────────────────
-    if texto_lower == "limite":
-        return {"type": "text", "content": (
-            "💳 *Limite mensal*\n\n"
-            "Para definir seu limite de gastos do mês, manda assim:\n"
-            "_limite_ seguido do valor. Exemplo:\n\n"
-            "*limite 2000*\n\n"
-            "Assim que você atingir 80% e 100% do limite, te aviso automaticamente aqui no WhatsApp 🔔"
-        )}
-        
     match_lim = re.match(r"^limite\s+([\d.,]+)", texto_lower)
     if match_lim:
         try:
@@ -401,6 +390,11 @@ async def handle_text_message(message: dict) -> dict:
         resposta = await processar_lembrete(texto, numero)
         return {"type": "text", "content": resposta}
 
+    # ── Limpa intenção pendente se usuário mandou outra coisa ────────────────
+    mem_check = await buscar_memoria(numero)
+    if mem_check.get("intencao_pendente"):
+        await limpar_intencao_pendente(numero)
+        
     # ── Registrar entrada ─────────────────────────────────────────────────────
     if await _detectar_entrada(texto):
         try:
@@ -469,9 +463,10 @@ async def handle_text_message(message: dict) -> dict:
 
     if intencao != "GASTO":
         try:
+            import re as _re
             resp = await _grok.chat.completions.create(
                 model="grok-4-1-fast-non-reasoning",
-                max_tokens=200,
+                max_tokens=300,
                 temperature=0.7,
                 messages=[
                     {
@@ -484,7 +479,10 @@ async def handle_text_message(message: dict) -> dict:
                             "ver resumo mensal (comando: resumo), definir limite MENSAL GERAL de gastos "
                             "(comando: limite 500), criar lembretes (ex: me lembre de algo às 14h). "
                             "NÃO existe limite por categoria. NÃO existe orçamento por item. "
-                            "Se a pessoa pedir algo que não existe, explique gentilmente o que é possível fazer. "
+                            "Se a pessoa mencionar um valor e quiser definir um limite, sugira configurar "
+                            "e termine sua resposta com a tag: [INTENCAO:limite:VALOR] onde VALOR é o número. "
+                            "Ex: [INTENCAO:limite:500]. Se não houver intenção de limite, não inclua a tag. "
+                            "Se a pessoa pedir algo que não existe, explique gentilmente o que é possível. "
                             "Seja breve, simpático e use emojis com moderação. Máximo 3 linhas."
                         ),
                     },
@@ -492,6 +490,12 @@ async def handle_text_message(message: dict) -> dict:
                 ],
             )
             resposta = resp.choices[0].message.content.strip()
+            match_intencao = _re.search(r"\[INTENCAO:([^\]]+)\]", resposta)
+            if match_intencao:
+                intencao_str = match_intencao.group(1)
+                resposta_limpa = _re.sub(r"\[INTENCAO:[^\]]+\]", "", resposta).strip()
+                await salvar_intencao_pendente(numero, intencao_str)
+                return {"type": "text", "content": resposta_limpa + "\n\nResponda *sim* para confirmar ou *não* para cancelar."}
             return {"type": "text", "content": resposta}
         except Exception as e:
             print(f"⚠️ Erro na resposta inteligente: {e}")
