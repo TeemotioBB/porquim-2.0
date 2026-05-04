@@ -41,9 +41,16 @@ Digite: *resumo*
 ou acompanhe tudo no seu dashboard:
 👉 https://dashboard-porquim-theta.vercel.app
 
-🔔 *Também te ajudo com lembretes!*
+🎯 *Quer definir um limite de gastos?*
+Digite: *Limite*
+e te aviso quando estiver chegando no teto 🔔
+
+🗓️ *Precisa de um lembrete?*
 Ex: _"Tenho reunião hoje 14h"_
 e eu te aviso na hora certa ⏰
+
+Para ver seus lembretes agendados:
+Digite: *meus lembretes*
 
 ❓ *Precisou de ajuda?*
 Digite: *suporte*
