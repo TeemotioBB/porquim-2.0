@@ -468,7 +468,34 @@ async def handle_text_message(message: dict) -> dict:
     intencao = await _detectar_intencao(texto)
 
     if intencao != "GASTO":
-        return {"type": "text", "content": "😅 Não entendi. Tenta assim: _'iFood 45 cartão'_ ou _'Uber 22 pix'_\n\nDigite *ajuda* para ver todos os comandos."}
+        try:
+            resp = await _grok.chat.completions.create(
+                model="grok-4-1-fast-non-reasoning",
+                max_tokens=200,
+                temperature=0.7,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Você é o Johnny 🐹, assistente financeiro simpático no WhatsApp. "
+                            "O usuário mandou uma mensagem que não é um gasto direto. "
+                            "Entenda a intenção e responda de forma útil e curta (máximo 3 linhas). "
+                            "Se for sobre limite/orçamento, explique como usar 'limite 500'. "
+                            "Se for sobre resumo, explique como usar 'resumo'. "
+                            "Se for sobre lembrete, explique como criar. "
+                            "Se não tiver relação com finanças, responda com simpatia que só entende de finanças. "
+                            "Nunca invente funcionalidades que não existem. "
+                            "Seja breve, simpático e use emojis com moderação."
+                        ),
+                    },
+                    {"role": "user", "content": texto},
+                ],
+            )
+            resposta = resp.choices[0].message.content.strip()
+            return {"type": "text", "content": resposta}
+        except Exception as e:
+            print(f"⚠️ Erro na resposta inteligente: {e}")
+            return {"type": "text", "content": "😅 Não entendi. Tenta assim: _'iFood 45 cartão'_ ou _'Uber 22 pix'_\n\nDigite *ajuda* para ver todos os comandos."}
 
     try:
         dados = await processar_gasto_texto(texto)
