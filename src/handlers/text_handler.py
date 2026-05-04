@@ -471,33 +471,57 @@ async def handle_text_message(message: dict) -> dict:
             print(f"❌ Erro ao editar: {e}")
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar Uber 55 pix*"}
 
-    # ── Limite por categoria: "limite roupas 200", "limite alimentação 800" ──
+    # ── Limite por categoria: matcher flexível ────────────────────────────────
+    # Aceita: "limite roupas 200", "quero gastar 500 com roupa esse mês",
+    #         "definir limite de alimentação 800", "limite de saúde de 300"
     # IMPORTANTE: precisa vir ANTES de "limite NUMERO" pra não capturar errado
     CATS = ["alimentação", "alimentacao", "transporte", "moradia", "saúde", "saude",
-            "lazer", "vestuário", "vestuario", "roupas", "educação", "educacao", "outros"]
+            "lazer", "vestuário", "vestuario", "roupas", "roupa", "educação", "educacao",
+            "outros", "comida", "alimento", "comer", "remédio", "remedio", "farmácia",
+            "farmacia", "uber", "gasolina", "combustível", "combustivel", "aluguel",
+            "faculdade", "escola", "curso", "passeio", "diversão", "diversao", "festa"]
     cat_alias = {
         "alimentacao": "Alimentação", "alimentação": "Alimentação",
-        "transporte": "Transporte", "moradia": "Moradia",
+        "comida": "Alimentação", "alimento": "Alimentação", "comer": "Alimentação",
+        "transporte": "Transporte", "uber": "Transporte",
+        "gasolina": "Transporte", "combustível": "Transporte", "combustivel": "Transporte",
+        "moradia": "Moradia", "aluguel": "Moradia",
         "saude": "Saúde", "saúde": "Saúde",
-        "lazer": "Lazer",
-        "vestuario": "Vestuário", "vestuário": "Vestuário", "roupas": "Vestuário",
+        "remédio": "Saúde", "remedio": "Saúde",
+        "farmácia": "Saúde", "farmacia": "Saúde",
+        "lazer": "Lazer", "passeio": "Lazer",
+        "diversão": "Lazer", "diversao": "Lazer", "festa": "Lazer",
+        "vestuario": "Vestuário", "vestuário": "Vestuário",
+        "roupas": "Vestuário", "roupa": "Vestuário",
         "educacao": "Educação", "educação": "Educação",
+        "faculdade": "Educação", "escola": "Educação", "curso": "Educação",
         "outros": "Outros"
     }
-    match_lim_cat = re.match(
-        r"^limite\s+(" + "|".join(CATS) + r")\s+([\d.,]+)",
-        texto_lower
-    )
-    if match_lim_cat:
-        cat_user = match_lim_cat.group(1)
-        try:
-            valor = float(match_lim_cat.group(2).replace(",", "."))
-            if valor <= 0:
-                return {"type": "text", "content": "❌ Valor inválido. Ex: *limite roupas 200*"}
-            categoria = cat_alias.get(cat_user, "Outros")
-            return {"type": "text", "content": await definir_limite_categoria_msg(numero, categoria, valor)}
-        except ValueError:
-            return {"type": "text", "content": "❌ Valor inválido. Ex: *limite roupas 200*"}
+
+    # Detecta intenção de limite por categoria de forma mais ampla
+    tem_palavra_limite = bool(re.search(
+        r"\b(limite|teto|m[aá]ximo|quero\s+gastar|gastar\s+at[eé]|"
+        r"posso\s+gastar|n[ãa]o\s+(quero|posso)\s+gastar)\b", texto_lower
+    ))
+
+    if tem_palavra_limite:
+        # Procura por menção a categoria
+        cat_encontrada = None
+        for c in CATS:
+            if re.search(rf"\b{re.escape(c)}\b", texto_lower):
+                cat_encontrada = cat_alias.get(c, "Outros")
+                break
+
+        # Procura por valor numérico
+        valor_match = re.search(r"\b(\d+(?:[.,]\d+)?)\b", texto_lower)
+
+        if cat_encontrada and valor_match:
+            try:
+                valor = float(valor_match.group(1).replace(",", "."))
+                if valor > 0:
+                    return {"type": "text", "content": await definir_limite_categoria_msg(numero, cat_encontrada, valor)}
+            except ValueError:
+                pass
 
     # ── Listar limites por categoria ──────────────────────────────────────────
     if texto_lower in ("limites", "meus limites", "ver limites", "listar limites"):
@@ -514,6 +538,7 @@ async def handle_text_message(message: dict) -> dict:
         return {"type": "text", "content": await remover_limite_categoria_msg(numero, categoria)}
 
     # ── Limite mensal geral: "limite 2000" ────────────────────────────────────
+    # Só dispara se for EXATAMENTE "limite NUMERO" (sem menção a categoria)
     match_lim = re.match(r"^limite\s+([\d.,]+)\s*$", texto_lower)
     if match_lim:
         try:
@@ -743,6 +768,15 @@ async def handle_text_message(message: dict) -> dict:
             elif acao == "LIMITE":
                 try:
                     v = float(str(valor).replace(",", "."))
+                    # Antes de aplicar o limite geral, checa se a frase original
+                    # menciona alguma categoria (ex: "quero gastar 500 com roupa")
+                    cat_no_texto = None
+                    for c in CATS:
+                        if re.search(rf"\b{re.escape(c)}\b", texto_lower):
+                            cat_no_texto = cat_alias.get(c, "Outros")
+                            break
+                    if cat_no_texto:
+                        return {"type": "text", "content": await definir_limite_categoria_msg(numero, cat_no_texto, v)}
                     return {"type": "text", "content": await definir_limite(numero, v)}
                 except:
                     return {"type": "text", "content": "😅 Não entendi o valor. Ex: _limite 2000_"}
