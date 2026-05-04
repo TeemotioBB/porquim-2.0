@@ -1,7 +1,12 @@
 import re
 from datetime import date, timedelta
 from src.services.ia_service import processar_gasto_texto, processar_entrada_texto
-from src.services.report_service import gerar_resumo, definir_limite, verificar_limite_pos_gasto
+from src.services.report_service import (
+    gerar_resumo, gerar_resumo_intervalo,
+    definir_limite, verificar_limite_pos_gasto,
+    definir_limite_categoria_msg, listar_limites_categoria_formatado,
+    remover_limite_categoria_msg,
+)
 from src.services.reminder_service import (
     _detectar_lembrete_rapido,
     detectar_lembrete_implicito,
@@ -9,11 +14,19 @@ from src.services.reminder_service import (
     buscar_lembretes_pendentes,
     cancelar_lembrete,
 )
+from src.services.recurring_service import (
+    detectar_recorrente, detectar_parcelado,
+    parsear_recorrente, parsear_parcelado,
+    criar_recorrente, criar_parcelado,
+    listar_recorrentes_formatado, listar_parcelas_formatado,
+)
 from src.core.database import (
     salvar_gasto, deletar_gasto, atualizar_gasto, buscar_gasto_por_id,
     salvar_entrada, deletar_entrada, buscar_entrada_por_id,
     salvar_memoria, buscar_memoria, limpar_memoria_gasto, limpar_memoria_entrada,
-    salvar_intencao_pendente, limpar_intencao_pendente
+    salvar_intencao_pendente, limpar_intencao_pendente,
+    cancelar_recorrente, buscar_recorrente,
+    cancelar_parcela, buscar_parcela,
 )
 from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
@@ -27,27 +40,38 @@ _grok = AsyncOpenAI(
 
 AJUDA = """👋 Oi! Eu sou o Johnny 🐹💚
 Seu assistente financeiro aqui no WhatsApp.
-Vou cuidar da sua grana com você, combinado? 😄
 
-💸 *Pra registrar um gasto:*
-É só mandar algo como:
+💸 *Registrar gastos:*
 _"Uber 27"_ ou _"Almoço 35 cartão"_
-(pode ser áudio ou foto também, eu entendo tudinho 👀)
+(também por áudio ou foto 👀)
 
 💰 *Entrou dinheiro?*
 _"Salário 3000"_ ou _"Recebi 500"_
 
-📊 *Quer ver como tá indo?*
-Digite: *resumo*
-ou acompanhe tudo no seu dashboard:
+💳 *Compras parceladas:*
+_"TV 1200 em 6x cartão"_
+_"Sapato 300 em 3x"_
+
+🔁 *Gastos recorrentes:*
+_"Todo dia 10 faculdade 120"_
+_"Aluguel 1500 todo dia 5"_
+
+🎯 *Limites:*
+_"Limite 2000"_ (geral)
+_"Limite roupas 200"_ (por categoria)
+
+📊 *Resumos:*
+*resumo* · *resumo hoje* · *resumo ontem*
+*resumo de janeiro* · *resumo mês passado*
+
+🔔 *Lembretes:*
+_"Reunião amanhã 14h"_
+
+📋 *Listar:*
+*recorrentes* · *parcelas* · *limites* · *meus lembretes*
+
+📲 *Dashboard completo:*
 👉 https://dashboard-porquim-theta.vercel.app
-
-🔔 *Também te ajudo com lembretes!*
-Ex: _"Tenho reunião hoje 14h"_
-e eu te aviso na hora certa ⏰
-
-❓ *Precisou de ajuda?*
-Digite: *suporte*
 
 Um hábito simples que muda tudo 💚"""
 
@@ -84,7 +108,6 @@ MESES_NOMES = {
 
 # Resumo em RAM (só para a sessão de edição/remoção por número)
 _resumo_gastos: dict[str, list] = {}
-# último gasto/entrada e lote agora persistidos no banco (memoria_usuario)
 
 
 # ─── Detecção de intenção: GASTO ─────────────────────────────────────────────
@@ -187,11 +210,12 @@ async def _detectar_entrada(texto: str) -> bool:
         return False
 
 
-# ─── Parser de mês ───────────────────────────────────────────────────────────
+# ─── Parser de mês para resumo ───────────────────────────────────────────────
 
 def _parse_mes_resumo(texto: str):
     hoje = date.today()
     resto = re.sub(r"^resumo\s*", "", texto.lower().strip()).strip()
+    resto = re.sub(r"^(do|de|da)\s+", "", resto).strip()
 
     if not resto:
         return hoje.year, hoje.month
@@ -214,6 +238,67 @@ def _parse_mes_resumo(texto: str):
     return hoje.year, hoje.month
 
 
+def _parse_resumo_intervalo(texto: str) -> tuple[date, date, str] | None:
+    """
+    Detecta resumos de intervalo: 'resumo hoje', 'resumo ontem', 'resumo semana',
+    'resumo dia 15', 'resumo de 01/05 a 15/05'.
+    Retorna (data_inicio, data_fim, titulo) ou None se não bater.
+    """
+    t = texto.lower().strip()
+    t = re.sub(r"^resumo\s*", "", t).strip()
+    t = re.sub(r"^(do|de|da)\s+", "", t).strip()
+    hoje = date.today()
+
+    if t == "hoje":
+        return hoje, hoje, "Hoje"
+    if t == "ontem":
+        ontem = hoje - timedelta(days=1)
+        return ontem, ontem, "Ontem"
+    if t in ("semana", "esta semana", "essa semana"):
+        # Início da semana = segunda-feira
+        ini = hoje - timedelta(days=hoje.weekday())
+        return ini, hoje, "Esta semana"
+    if t == "semana passada":
+        fim_passada = hoje - timedelta(days=hoje.weekday() + 1)
+        ini_passada = fim_passada - timedelta(days=6)
+        return ini_passada, fim_passada, "Semana passada"
+
+    # "resumo dia 15" ou "resumo dia 15/05"
+    m = re.match(r"^dia\s+(\d{1,2})(?:[/-](\d{1,2}))?(?:[/-](\d{2,4}))?$", t)
+    if m:
+        dia = int(m.group(1))
+        mes = int(m.group(2)) if m.group(2) else hoje.month
+        ano = int(m.group(3)) if m.group(3) else hoje.year
+        if ano < 100:
+            ano += 2000
+        try:
+            d = date(ano, mes, dia)
+            return d, d, d.strftime("%d/%m/%Y")
+        except ValueError:
+            return None
+
+    # "resumo 01/05 a 15/05" ou "resumo de 01/05 até 15/05"
+    m = re.match(
+        r"^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\s+(?:a|até|ate)\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$",
+        t
+    )
+    if m:
+        try:
+            d1, m1, a1 = int(m.group(1)), int(m.group(2)), int(m.group(3) or hoje.year)
+            d2, m2, a2 = int(m.group(4)), int(m.group(5)), int(m.group(6) or hoje.year)
+            if a1 < 100: a1 += 2000
+            if a2 < 100: a2 += 2000
+            ini = date(a1, m1, d1)
+            fim = date(a2, m2, d2)
+            if ini > fim:
+                ini, fim = fim, ini
+            return ini, fim, f"{ini.strftime('%d/%m')} a {fim.strftime('%d/%m/%Y')}"
+        except ValueError:
+            return None
+
+    return None
+
+
 # ─── Handler principal ────────────────────────────────────────────────────────
 
 async def handle_text_message(message: dict) -> dict:
@@ -226,8 +311,8 @@ async def handle_text_message(message: dict) -> dict:
         return {"type": "text", "content": AJUDA}
 
     # ── Confirmação de intenção pendente ──────────────────────────────────────
-    _confirmacoes = ["sim", "pode", "confirma", "isso", "quero", "vai", "ok", "bora", "yes", "s"]
-    _cancelamentos = ["não", "nao", "cancela", "esquece", "deixa", "no"]
+    _confirmacoes = ["sim", "pode", "confirma", "isso", "quero", "vai", "ok", "bora", "yes", "s", "já paguei", "ja paguei", "paguei"]
+    _cancelamentos = ["não", "nao", "cancela", "esquece", "deixa", "no", "ainda não", "ainda nao", "depois"]
 
     if texto_lower in _confirmacoes or texto_lower in _cancelamentos:
         mem = await buscar_memoria(numero)
@@ -235,14 +320,52 @@ async def handle_text_message(message: dict) -> dict:
         if intencao:
             await limpar_intencao_pendente(numero)
             if texto_lower in _cancelamentos:
-                return {"type": "text", "content": "Ok, cancelado! 😊 Pode mandar outro comando quando quiser."}
+                return {"type": "text", "content": "Ok, sem problema! 😊 Pode mandar outro comando quando quiser."}
             if intencao.startswith("limite:"):
                 valor = float(intencao.split(":")[1])
                 return {"type": "text", "content": await definir_limite(numero, valor)}
+            if intencao.startswith("recorrente:"):
+                # Lança o recorrente como gasto
+                rec_id = int(intencao.split(":")[1])
+                rec = await buscar_recorrente(rec_id, numero)
+                if not rec:
+                    return {"type": "text", "content": "❌ Recorrente não encontrado."}
+                hoje = date.today()
+                gasto_dados = {
+                    "descricao": rec["descricao"],
+                    "valor": float(rec["valor"]),
+                    "categoria": rec["categoria"],
+                    "forma_pagamento": rec["forma_pagamento"] or "Desconhecido",
+                    "data": hoje,
+                    "hashtag": f"#rec{rec_id}",
+                }
+                gasto_id = await salvar_gasto(numero, gasto_dados, fonte="recorrente")
+                await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
+                alerta = await verificar_limite_pos_gasto(numero, rec["categoria"]) or ""
+                from src.services.report_service import EMOJI_CATEGORIA as _EMOJI
+                emoji = _EMOJI.get(rec["categoria"], "📦")
+                return {
+                    "type": "text",
+                    "content": (
+                        f"✅ *Pagamento registrado!*\n\n"
+                        f"{emoji} {rec['descricao']}\n"
+                        f"💰 R$ {float(rec['valor']):.2f}\n"
+                        f"🏷️ {rec['categoria']}\n"
+                        f"📅 {hoje.strftime('%d/%m/%Y')}{alerta}\n\n"
+                        f"_Te aviso de novo no mês que vem 🐹_"
+                    )
+                }
 
+    # ── Resumo por intervalo (hoje/ontem/dia X/etc) ──────────────────────────
+    if texto_lower.startswith("resumo"):
+        intervalo = _parse_resumo_intervalo(texto)
+        if intervalo:
+            ini, fim, titulo = intervalo
+            conteudo, gastos = await gerar_resumo_intervalo(numero, ini, fim, titulo)
+            _resumo_gastos[numero] = gastos
+            return {"type": "text", "content": conteudo}
 
-
-    # ── Resumo ────────────────────────────────────────────────────────────────
+    # ── Resumo (mês) ──────────────────────────────────────────────────────────
     if texto_lower.startswith("resumo") or texto_lower in ["relatorio", "relatório", "gastos", "ver gastos"]:
         ano, mes = _parse_mes_resumo(texto_lower)
         conteudo, gastos = await gerar_resumo(numero, ano=ano, mes=mes)
@@ -348,14 +471,99 @@ async def handle_text_message(message: dict) -> dict:
             print(f"❌ Erro ao editar: {e}")
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar Uber 55 pix*"}
 
-    # ── Limite ────────────────────────────────────────────────────────────────
-    match_lim = re.match(r"^limite\s+([\d.,]+)", texto_lower)
+    # ── Limite por categoria: "limite roupas 200", "limite alimentação 800" ──
+    # IMPORTANTE: precisa vir ANTES de "limite NUMERO" pra não capturar errado
+    CATS = ["alimentação", "alimentacao", "transporte", "moradia", "saúde", "saude",
+            "lazer", "vestuário", "vestuario", "roupas", "educação", "educacao", "outros"]
+    cat_alias = {
+        "alimentacao": "Alimentação", "alimentação": "Alimentação",
+        "transporte": "Transporte", "moradia": "Moradia",
+        "saude": "Saúde", "saúde": "Saúde",
+        "lazer": "Lazer",
+        "vestuario": "Vestuário", "vestuário": "Vestuário", "roupas": "Vestuário",
+        "educacao": "Educação", "educação": "Educação",
+        "outros": "Outros"
+    }
+    match_lim_cat = re.match(
+        r"^limite\s+(" + "|".join(CATS) + r")\s+([\d.,]+)",
+        texto_lower
+    )
+    if match_lim_cat:
+        cat_user = match_lim_cat.group(1)
+        try:
+            valor = float(match_lim_cat.group(2).replace(",", "."))
+            if valor <= 0:
+                return {"type": "text", "content": "❌ Valor inválido. Ex: *limite roupas 200*"}
+            categoria = cat_alias.get(cat_user, "Outros")
+            return {"type": "text", "content": await definir_limite_categoria_msg(numero, categoria, valor)}
+        except ValueError:
+            return {"type": "text", "content": "❌ Valor inválido. Ex: *limite roupas 200*"}
+
+    # ── Listar limites por categoria ──────────────────────────────────────────
+    if texto_lower in ("limites", "meus limites", "ver limites", "listar limites"):
+        return {"type": "text", "content": await listar_limites_categoria_formatado(numero)}
+
+    # ── Remover limite de categoria ──────────────────────────────────────────
+    match_rem_lim = re.match(
+        r"^remover\s+limite\s+(" + "|".join(CATS) + r")",
+        texto_lower
+    )
+    if match_rem_lim:
+        cat_user = match_rem_lim.group(1)
+        categoria = cat_alias.get(cat_user, "Outros")
+        return {"type": "text", "content": await remover_limite_categoria_msg(numero, categoria)}
+
+    # ── Limite mensal geral: "limite 2000" ────────────────────────────────────
+    match_lim = re.match(r"^limite\s+([\d.,]+)\s*$", texto_lower)
     if match_lim:
         try:
             valor = float(match_lim.group(1).replace(",", "."))
             return {"type": "text", "content": await definir_limite(numero, valor)}
         except ValueError:
-            return {"type": "text", "content": "❌ Valor inválido. Ex: _limite 2000_"}
+            return {"type": "text", "content": "❌ Valor inválido. Ex: *limite 2000*"}
+
+    # ── Recorrentes: listar ───────────────────────────────────────────────────
+    if texto_lower in ("recorrentes", "meus recorrentes", "ver recorrentes", "listar recorrentes"):
+        return {"type": "text", "content": await listar_recorrentes_formatado(numero)}
+
+    # ── Recorrentes: cancelar ─────────────────────────────────────────────────
+    match_cancel_rec = re.match(r"^cancelar\s+recorrente\s+(\d+)$", texto_lower)
+    if match_cancel_rec:
+        rec_id = int(match_cancel_rec.group(1))
+        rec = await buscar_recorrente(rec_id, numero)
+        if not rec:
+            return {"type": "text", "content": f"❌ Recorrente #{rec_id} não encontrado."}
+        ok = await cancelar_recorrente(rec_id, numero)
+        if ok:
+            return {"type": "text", "content": f"🗑️ *Recorrente cancelado!*\n\n_{rec['descricao']} · R$ {float(rec['valor']):.2f}_\n\n_Não vou mais te avisar todo mês._"}
+        return {"type": "text", "content": "❌ Não consegui cancelar."}
+
+    # ── Parcelas: listar ──────────────────────────────────────────────────────
+    if texto_lower in ("parcelas", "minhas parcelas", "ver parcelas", "listar parcelas"):
+        return {"type": "text", "content": await listar_parcelas_formatado(numero)}
+
+    # ── Parcelas: cancelar ────────────────────────────────────────────────────
+    match_cancel_parc = re.match(r"^cancelar\s+parcela\s+(\d+)$", texto_lower)
+    if match_cancel_parc:
+        parc_id = int(match_cancel_parc.group(1))
+        parc = await buscar_parcela(parc_id, numero)
+        if not parc:
+            return {"type": "text", "content": f"❌ Parcela #{parc_id} não encontrada."}
+        ok = await cancelar_parcela(parc_id, numero)
+        if ok:
+            atual = parc["parcela_atual"]
+            total = parc["num_parcelas"]
+            return {
+                "type": "text",
+                "content": (
+                    f"🗑️ *Parcelas futuras canceladas!*\n\n"
+                    f"_{parc['descricao']}_\n"
+                    f"📊 {atual}/{total} já pagas\n\n"
+                    f"_Não vou mais lançar parcelas dessa compra._\n"
+                    f"_Os gastos já lançados continuam no histórico._"
+                )
+            }
+        return {"type": "text", "content": "❌ Não consegui cancelar."}
 
     # ── Lembrete: "meus lembretes" ou "ver lembretes" ────────────────────────
     if re.search(r"\b(meus lembretes|ver lembretes|listar lembretes)\b", texto_lower):
@@ -380,6 +588,36 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Lembrete #{lembrete_id} cancelado!*"}
         return {"type": "text", "content": f"❌ Lembrete #{lembrete_id} não encontrado ou já foi enviado."}
 
+    # ── Detecção de RECORRENTE (antes de gasto comum) ────────────────────────
+    if detectar_recorrente(texto):
+        dados = await parsear_recorrente(texto, _grok)
+        if dados:
+            return {"type": "text", "content": await criar_recorrente(numero, dados)}
+        return {
+            "type": "text",
+            "content": (
+                "🔁 Não consegui entender o recorrente. Tenta assim:\n"
+                "_'Todo dia 10 faculdade 120'_\n"
+                "_'Aluguel 1500 todo dia 5'_\n"
+                "_'Academia 80 todo mês dia 15 cartão'_"
+            )
+        }
+
+    # ── Detecção de PARCELADO (antes de gasto comum) ─────────────────────────
+    if detectar_parcelado(texto):
+        dados = await parsear_parcelado(texto, _grok)
+        if dados:
+            return {"type": "text", "content": await criar_parcelado(numero, dados)}
+        return {
+            "type": "text",
+            "content": (
+                "💳 Não consegui entender a compra parcelada. Tenta assim:\n"
+                "_'TV 1200 em 6x cartão'_\n"
+                "_'Sapato 300 parcelado em 3x'_\n"
+                "_'Geladeira 12x de 250'_"
+            )
+        }
+
     # ── Lembrete: criar com palavra-chave ("me lembre...", "lembra de...") ───
     if _detectar_lembrete_rapido(texto):
         resposta = await processar_lembrete(texto, numero)
@@ -394,7 +632,7 @@ async def handle_text_message(message: dict) -> dict:
     mem_check = await buscar_memoria(numero)
     if mem_check.get("intencao_pendente"):
         await limpar_intencao_pendente(numero)
-        
+
     # ── Registrar entrada ─────────────────────────────────────────────────────
     if await _detectar_entrada(texto):
         try:
@@ -422,9 +660,7 @@ async def handle_text_message(message: dict) -> dict:
     # ── Múltiplos gastos agrupados (uma linha por gasto) ──────────────────────
     linhas = [l.strip() for l in texto.strip().splitlines() if l.strip()]
     if len(linhas) > 1:
-        # Verifica se parece uma lista de gastos: pelo menos 2 linhas com número
         linhas_com_numero = [l for l in linhas if re.search(r"\d", l)]
-        # Linhas sem número servem de contexto (ex: "Meus gastos no mês de maio")
         contexto_lote = " ".join(l for l in linhas if not re.search(r"\d", l))
         if len(linhas_com_numero) >= 2:
             cards = []
@@ -435,7 +671,7 @@ async def handle_text_message(message: dict) -> dict:
                     dados = await processar_gasto_texto(linha, contexto=contexto_lote)
                     gasto_id = await salvar_gasto(numero, dados, fonte="texto")
                     ids_registrados.append(gasto_id)
-                    alerta = await verificar_limite_pos_gasto(numero) or ""
+                    alerta = await verificar_limite_pos_gasto(numero, dados.get("categoria")) or ""
                     card = CARD_GASTO.format(
                         descricao=dados["descricao"],
                         valor=float(dados["valor"]),
@@ -545,7 +781,7 @@ async def handle_text_message(message: dict) -> dict:
         gasto_id = await salvar_gasto(numero, dados, fonte="texto")
         await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
 
-        alerta = await verificar_limite_pos_gasto(numero) or ""
+        alerta = await verificar_limite_pos_gasto(numero, dados.get("categoria")) or ""
 
         card = CARD_GASTO.format(
             descricao=dados["descricao"],
