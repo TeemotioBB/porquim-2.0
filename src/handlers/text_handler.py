@@ -488,7 +488,7 @@ async def handle_text_message(message: dict) -> dict:
                             "'quero gastar 500 esse mês' → {\"acao\": \"LIMITE\", \"valor\": \"500\"}\n"
                             "'quanto gastei?' → {\"acao\": \"RESUMO\", \"valor\": \"\"}\n"
                             "'recebi 1000 de freelance' → {\"acao\": \"ENTRADA\", \"valor\": \"recebi 1000 de freelance\"}\n"
-                            "'boa noite' → {\"acao\": \"OUTRO\", \"valor\": \"Boa noite! 🐹 Me manda um gasto ou digite *ajuda*\"}"
+                            "'boa noite' → {\"acao\": \"OUTRO\", \"valor\": \"Boa noite! 🐹 Digite *ajuda* para ver os meus comandos válidos.\"}"
                         ),
                     },
                     {"role": "user", "content": texto},
