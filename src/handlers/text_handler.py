@@ -464,42 +464,80 @@ async def handle_text_message(message: dict) -> dict:
     if intencao != "GASTO":
         try:
             import re as _re
+            import json as _json
             resp = await _grok.chat.completions.create(
                 model="grok-4-1-fast-non-reasoning",
-                max_tokens=300,
-                temperature=0.7,
+                max_tokens=150,
+                temperature=0,
                 messages=[
                     {
                         "role": "system",
                         "content": (
-                            "Você é o Johnny 🐹, assistente financeiro simpático no WhatsApp. "
-                            "O usuário mandou uma mensagem que não é um gasto direto. "
-                            "Entenda a intenção e responda de forma útil e HONESTA em no máximo 2 linhas. "
-                            "Funcionalidades disponíveis: registrar gastos, registrar entradas, "
-                            "ver resumo mensal (comando: resumo), definir limite MENSAL GERAL de gastos "
-                            "(comando: limite 500), criar lembretes (ex: me lembre de algo às 14h). "
-                            "NÃO existe limite por categoria. NÃO existe orçamento por item. "
-                            "NUNCA peça confirmação. NUNCA use tags ou colchetes. "
-                            "NUNCA invente funcionalidades. "
-                            "Se a pessoa mencionar um valor e quiser definir um limite, sugira o comando "
-                            "e inclua no FINAL da resposta exatamente: [INTENCAO:limite:VALOR] "
-                            "onde VALOR é só o número. Ex: [INTENCAO:limite:500]. "
-                            "Para qualquer outra situação, oriente diretamente sem pedir confirmação."
+                            "Você classifica mensagens de WhatsApp de um app financeiro. "
+                            "Responda APENAS com JSON válido, sem markdown:\n"
+                            "{\"acao\": \"TIPO\", \"valor\": \"...\"}\n\n"
+                            "Tipos possíveis:\n"
+                            "- LEMBRETE: ação futura com data/hora. valor = texto original completo\n"
+                            "- LIMITE: definir teto de gastos mensais. valor = número extraído\n"
+                            "- RESUMO: ver gastos do mês. valor = \"\"\n"
+                            "- ENTRADA: dinheiro recebido. valor = texto original completo\n"
+                            "- OUTRO: qualquer outra coisa. valor = resposta curta e simpática em 1 linha\n\n"
+                            "Exemplos:\n"
+                            "'pagar boleto amanhã 8h' → {\"acao\": \"LEMBRETE\", \"valor\": \"pagar boleto amanhã 8h\"}\n"
+                            "'consulta sexta 15h' → {\"acao\": \"LEMBRETE\", \"valor\": \"consulta sexta 15h\"}\n"
+                            "'quero gastar 500 esse mês' → {\"acao\": \"LIMITE\", \"valor\": \"500\"}\n"
+                            "'quanto gastei?' → {\"acao\": \"RESUMO\", \"valor\": \"\"}\n"
+                            "'recebi 1000 de freelance' → {\"acao\": \"ENTRADA\", \"valor\": \"recebi 1000 de freelance\"}\n"
+                            "'boa noite' → {\"acao\": \"OUTRO\", \"valor\": \"Boa noite! 🐹 Me manda um gasto ou digite *ajuda*\"}"
                         ),
                     },
                     {"role": "user", "content": texto},
                 ],
             )
-            resposta = resp.choices[0].message.content.strip()
-            match_intencao = _re.search(r"\[INTENCAO:([^\]]+)\]", resposta)
-            if match_intencao:
-                intencao_str = match_intencao.group(1)
-                resposta_limpa = _re.sub(r"\[INTENCAO:[^\]]+\]", "", resposta).strip()
-                await salvar_intencao_pendente(numero, intencao_str)
-                return {"type": "text", "content": resposta_limpa + "\n\nResponda *sim* para confirmar ou *não* para cancelar."}
-            return {"type": "text", "content": resposta}
+            raw = resp.choices[0].message.content.strip()
+            raw = _re.sub(r"```(?:json)?", "", raw).strip().rstrip("```").strip()
+            classificacao = _json.loads(raw)
+            acao = classificacao.get("acao", "OUTRO")
+            valor = classificacao.get("valor", "")
+
+            if acao == "LEMBRETE":
+                resposta = await processar_lembrete(valor, numero)
+                return {"type": "text", "content": resposta}
+
+            elif acao == "LIMITE":
+                try:
+                    v = float(str(valor).replace(",", "."))
+                    return {"type": "text", "content": await definir_limite(numero, v)}
+                except:
+                    return {"type": "text", "content": "😅 Não entendi o valor. Ex: _limite 2000_"}
+
+            elif acao == "RESUMO":
+                hoje = date.today()
+                conteudo, gastos = await gerar_resumo(numero, ano=hoje.year, mes=hoje.month)
+                _resumo_gastos[numero] = gastos
+                return {"type": "text", "content": conteudo}
+
+            elif acao == "ENTRADA":
+                try:
+                    dados = await processar_entrada_texto(valor)
+                    entrada_id = await salvar_entrada(numero, dados, fonte="texto")
+                    await salvar_memoria(numero, ultima_entrada_id=entrada_id)
+                    card = CARD_ENTRADA.format(
+                        descricao=dados["descricao"],
+                        valor=float(dados["valor"]),
+                        categoria=dados.get("categoria", "Outros"),
+                        data=dados["data"],
+                        hashtag=dados["hashtag"],
+                    )
+                    return {"type": "text", "content": card}
+                except:
+                    return {"type": "text", "content": "😅 Não entendi essa entrada. Ex: _salário 3000_"}
+
+            else:
+                return {"type": "text", "content": valor or "😅 Não entendi. Digite *ajuda* para ver os comandos."}
+
         except Exception as e:
-            print(f"⚠️ Erro na resposta inteligente: {e}")
+            print(f"⚠️ Erro na classificação inteligente: {e}")
             return {"type": "text", "content": "😅 Não entendi. Tenta assim: _'iFood 45 cartão'_ ou _'Uber 22 pix'_\n\nDigite *ajuda* para ver todos os comandos."}
 
     try:
