@@ -58,6 +58,20 @@ def gerar_token() -> str:
 
 # ── Salvar token após pagamento aprovado ──────────────────────────────────────
 
+async def buscar_token_por_payment_id(payment_id: str) -> str | None:
+    """
+    Retorna o token já salvo para um payment_id, ou None se não existir.
+    Usado para garantir idempotência no webhook do Mercado Pago:
+    se o webhook disparar múltiplas vezes, reutilizamos o token original.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT token FROM tokens WHERE payment_id = $1", payment_id
+        )
+        return row["token"] if row else None
+
+
 async def salvar_token(token: str, plano: str, valor_pago: float, payment_id: str):
     """
     Salva o token gerado após confirmação do pagamento.
