@@ -122,6 +122,8 @@ async def _create_tables():
             -- ── Adiciona coluna parcela_id à tabela gastos (rastreamento) ──────
             ALTER TABLE gastos ADD COLUMN IF NOT EXISTS parcela_id INTEGER;
             CREATE INDEX IF NOT EXISTS idx_gastos_parcela ON gastos(parcela_id);
+
+            ALTER TABLE memoria_usuario ADD COLUMN IF NOT EXISTS resumo_ids TEXT;
         """)
 
 def _parse_date(s: str) -> _date:
@@ -425,6 +427,28 @@ async def limpar_intencao_pendente(usuario: str):
             UPDATE memoria_usuario SET intencao_pendente=NULL WHERE usuario=$1
         """, usuario)
 
+async def salvar_resumo_ids(usuario: str, ids: list):
+    """Persiste os IDs do último resumo no banco (substitui o dict em memória)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        ids_str = ",".join(str(i) for i in ids)
+        await conn.execute("""
+            INSERT INTO memoria_usuario (usuario, resumo_ids, atualizado_em)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (usuario) DO UPDATE SET resumo_ids=$2, atualizado_em=NOW()
+        """, usuario, ids_str)
+
+async def buscar_resumo_ids(usuario: str) -> list:
+    """Retorna a lista de IDs do último resumo salvo no banco."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        val = await conn.fetchval(
+            "SELECT resumo_ids FROM memoria_usuario WHERE usuario=$1", usuario
+        )
+        if not val:
+            return []
+        return [int(i) for i in val.split(",") if i]
+
 # ── Gastos Recorrentes ──────────────────────────────────────────────────────
 
 async def salvar_recorrente(usuario: str, descricao: str, valor: float, categoria: str,
@@ -557,3 +581,39 @@ async def buscar_parcelas_ativas_todas() -> list:
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM parcelas WHERE ativo=TRUE")
         return [dict(r) for r in rows]
+
+# ── Reset completo do usuário ───────────────────────────────────────────────
+
+async def resetar_usuario(usuario: str) -> dict:
+    """
+    Remove TODOS os dados do usuário: gastos, entradas, limites (geral e por
+    categoria), parcelas, recorrentes, lembretes e memória de sessão.
+    Retorna um dict com a contagem de registros removidos por tabela.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        r_gastos      = await conn.execute("DELETE FROM gastos              WHERE usuario=$1", usuario)
+        r_entradas    = await conn.execute("DELETE FROM entradas            WHERE usuario=$1", usuario)
+        r_limites     = await conn.execute("DELETE FROM limites             WHERE usuario=$1", usuario)
+        r_lim_cat     = await conn.execute("DELETE FROM limites_categoria   WHERE usuario=$1", usuario)
+        r_parcelas    = await conn.execute("DELETE FROM parcelas            WHERE usuario=$1", usuario)
+        r_recorrentes = await conn.execute("DELETE FROM gastos_recorrentes  WHERE usuario=$1", usuario)
+        r_lembretes   = await conn.execute("DELETE FROM lembretes           WHERE usuario=$1", usuario)
+        r_memoria     = await conn.execute("DELETE FROM memoria_usuario     WHERE usuario=$1", usuario)
+
+        def _n(tag: str) -> int:
+            # asyncpg retorna string tipo "DELETE 7"
+            try:
+                return int(tag.split()[-1])
+            except Exception:
+                return 0
+
+        return {
+            "gastos":       _n(r_gastos),
+            "entradas":     _n(r_entradas),
+            "limites":      _n(r_limites),
+            "limites_cat":  _n(r_lim_cat),
+            "parcelas":     _n(r_parcelas),
+            "recorrentes":  _n(r_recorrentes),
+            "lembretes":    _n(r_lembretes),
+        }
