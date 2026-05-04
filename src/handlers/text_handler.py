@@ -343,6 +343,14 @@ async def handle_text_message(message: dict) -> dict:
         return {"type": "text", "content": "❌ Não consegui editar. Tente: *editar Uber 55 pix*"}
 
     # ── Limite ────────────────────────────────────────────────────────────────
+    if texto_lower == "limite":
+        return {"type": "text", "content": (
+            "💳 *Limite mensal*\n\n"
+            "Para definir seu limite, manda assim:\n"
+            "_\"limite 2000\"_\n\n"
+            "Você recebe alertas quando atingir 80% e 100% do limite. 🔔"
+        )}
+
     match_lim = re.match(r"^limite\s+([\d.,]+)", texto_lower)
     if match_lim:
         try:
