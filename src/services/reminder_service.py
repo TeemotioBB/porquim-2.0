@@ -273,7 +273,7 @@ async def _disparar_lembretes(enviar_func):
                     if horario > agora_check:
                         await asyncio.sleep((horario - agora_check).total_seconds())
 
-                    texto_envio = f"🔔 *Lembrete!*\n\n📌 {mensagem.capitalize()}"
+                    texto_envio = f"🐹 *Oi! Tô aqui pra te lembrar:*\n\n📌 {mensagem.capitalize()}"
                     remote_jid = usuario if "@" in usuario else f"{usuario}@s.whatsapp.net"
 
                     try:
