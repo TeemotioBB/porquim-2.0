@@ -40,37 +40,41 @@ _grok = AsyncOpenAI(
 
 AJUDA = """👋 Oi! Eu sou o Johnny 🐹💚
 Seu assistente financeiro aqui no WhatsApp.
+*(Entendo também por áudio ou foto 👀)*
 
-💸 *Registrar gastos:*
-_"Uber 27"_ ou _"Almoço 35 cartão"_
-(também por áudio ou foto 👀)
+💸 *Registrar um gasto:*
+_"Uber 27"_
+_"Almoço 35 cartão"_
+_"iFood 52 pix"_
 
-💰 *Entrou dinheiro?*
-_"Salário 3000"_ ou _"Recebi 500"_
+💰 *Recebeu dinheiro?*
+_"Salário 3200"_
+_"Recebi 500 de freela"_
 
-💳 *Compras parceladas:*
-_"TV 1200 em 6x cartão"_
+💳 *Compra parcelada:*
+_"TV 1800 em 12x cartão"_
 _"Sapato 300 em 3x"_
 
-🔁 *Gastos recorrentes:*
-_"Todo dia 10 faculdade 120"_
+🔁 *Gasto que se repete todo mês:*
 _"Aluguel 1500 todo dia 5"_
+_"Academia 100 todo dia 10"_
 
-🎯 *Limites:*
-_"Limite 2000"_ (geral)
-_"Limite roupas 200"_ (por categoria)
+🎯 *Definir um limite de gastos:*
+_"Meu limite do mês é 3000"_
+_"Quero gastar no máximo 400 em alimentação"_
+_"Limite de roupas 200"_
 
-📊 *Resumos:*
+📊 *Ver seus gastos:*
 *resumo* · *resumo hoje* · *resumo ontem*
 *resumo de janeiro* · *resumo mês passado*
 
-🔔 *Lembretes:*
-_"Reunião amanhã 14h"_
+🔔 *Criar um lembrete:*
+_"Me lembra de pagar o boleto amanhã às 10h"_
 
 📋 *Listar:*
 *recorrentes* · *parcelas* · *limites* · *meus lembretes*
 
-📲 *Dashboard completo:*
+📲 *Seu Dashboard completo:*
 👉 https://dashboard-porquim-theta.vercel.app
 
 Um hábito simples que muda tudo 💚"""
