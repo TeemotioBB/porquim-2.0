@@ -34,7 +34,8 @@ _"Uber 27"_ ou _"Almoço 35 cartão"_
 (pode ser áudio ou foto também, eu entendo tudinho 👀)
 
 💰 *Entrou dinheiro?*
-_"Salário 3000"_ ou _"Recebi 500"_
+É só me contar que eu registro:
+_"Salário 3000"_ ou _"Recebi 500 de freelance"_
 
 📊 *Quer ver como tá indo?*
 Digite: *resumo*
