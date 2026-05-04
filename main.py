@@ -492,6 +492,16 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
                 Clique no botão abaixo para ativar seu acesso no WhatsApp:
               </p>
               <a href="{link_acesso}" style="display:block;background:#1DB954;color:#000;text-align:center;padding:16px 28px;border-radius:100px;text-decoration:none;font-weight:700;font-size:1rem;margin-bottom:28px;">📱 Ativar acesso no WhatsApp</a>
+
+              <div style="background:rgba(0,0,0,0.2);border-radius:12px;padding:16px 18px;margin-bottom:24px;">
+                <p style="margin:0 0 10px;font-size:0.78rem;font-weight:500;color:#f0f5f1;">O que você pode fazer com o Johnny:</p>
+                <p style="margin:0 0 6px;font-size:0.75rem;color:rgba(240,245,241,0.6);">💸 Registrar gastos por texto, áudio ou foto</p>
+                <p style="margin:0 0 6px;font-size:0.75rem;color:rgba(240,245,241,0.6);">💰 Registrar entradas de dinheiro</p>
+                <p style="margin:0 0 6px;font-size:0.75rem;color:rgba(240,245,241,0.6);">📊 Ver resumo dos seus gastos a qualquer hora</p>
+                <p style="margin:0 0 6px;font-size:0.75rem;color:rgba(240,245,241,0.6);">🎯 Definir limite mensal e receber alertas</p>
+                <p style="margin:0;font-size:0.75rem;color:rgba(240,245,241,0.6);">🔔 Criar lembretes com linguagem natural</p>
+              </div>
+
               <div style="height:1px;background:rgba(255,255,255,0.06);margin-bottom:24px;"></div>
               <p style="margin:0 0 10px;font-size:0.75rem;color:rgba(240,245,241,0.4);">Ou abra o WhatsApp e envie este código para o bot:</p>
               <div style="background:rgba(0,0,0,0.3);border:1px solid rgba(29,185,84,0.25);border-radius:12px;padding:14px 18px;text-align:center;">
