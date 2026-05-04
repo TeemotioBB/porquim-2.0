@@ -346,11 +346,12 @@ async def handle_text_message(message: dict) -> dict:
     if texto_lower == "limite":
         return {"type": "text", "content": (
             "💳 *Limite mensal*\n\n"
-            "Para definir seu limite, manda assim:\n"
-            "_\"limite 2000\"_\n\n"
-            "Você recebe alertas quando atingir 80% e 100% do limite. 🔔"
+            "Para definir seu limite de gastos do mês, manda assim:\n"
+            "_limite_ seguido do valor. Exemplo:\n\n"
+            "*limite 2000*\n\n"
+            "Assim que você atingir 80% e 100% do limite, te aviso automaticamente aqui no WhatsApp 🔔"
         )}
-
+        
     match_lim = re.match(r"^limite\s+([\d.,]+)", texto_lower)
     if match_lim:
         try:
