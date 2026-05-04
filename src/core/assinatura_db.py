@@ -150,9 +150,43 @@ async def ativar_assinatura(usuario: str, token: str) -> dict:
 
 # ── Verificar se usuário tem acesso ──────────────────────────────────────────
 
+def _variantes_jid(usuario: str) -> list:
+    """
+    Gera todas as variações possíveis de um JID de WhatsApp.
+    Resolve o problema do 9 dígito brasileiro e do DDI 55:
+      553198739574  <->  5531998739574  <->  3198739574  <->  31998739574
+    """
+    sufixo = "@s.whatsapp.net"
+    num = usuario.replace(sufixo, "")
+    variantes = set()
+
+    # Extrai número sem DDI 55
+    if num.startswith("55") and len(num) > 11:
+        sem55 = num[2:]
+    else:
+        sem55 = num
+
+    # Gera com e sem o 9 dígito
+    nums_locais = {sem55}
+    if len(sem55) == 11 and sem55[2] == "9":    # tem o 9 -> adiciona sem
+        nums_locais.add(sem55[:2] + sem55[3:])
+    elif len(sem55) == 10:                       # sem o 9 -> adiciona com
+        nums_locais.add(sem55[:2] + "9" + sem55[2:])
+
+    # Gera com e sem DDI 55
+    for n in nums_locais:
+        variantes.add(n + sufixo)
+        variantes.add("55" + n + sufixo)
+
+    variantes.add(usuario)  # garante que o original sempre está
+    return list(variantes)
+
+
 async def verificar_acesso(usuario: str) -> dict:
     """
     Verifica se o usuário pode usar o bot.
+    Tenta todas as variações do JID (com/sem DDI 55, com/sem 9 dígito)
+    para não bloquear usuário que pagou por diferença de formato de número.
 
     Retornos:
       {"tem_acesso": True, "plano": "anual", "dias_restantes": 200}
@@ -161,8 +195,9 @@ async def verificar_acesso(usuario: str) -> dict:
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
+        variantes = _variantes_jid(usuario)
         row = await conn.fetchrow(
-            "SELECT * FROM assinaturas WHERE usuario = $1", usuario
+            "SELECT * FROM assinaturas WHERE usuario = ANY($1::text[])", variantes
         )
 
         if not row:
@@ -178,7 +213,7 @@ async def verificar_acesso(usuario: str) -> dict:
         if expira < agora:
             # Marca como expirado no banco
             await conn.execute(
-                "UPDATE assinaturas SET status = 'expirado' WHERE usuario = $1", usuario
+                "UPDATE assinaturas SET status = 'expirado' WHERE usuario = $1", row["usuario"]
             )
             return {"tem_acesso": False, "motivo": "expirado", "plano": row["plano"]}
 
