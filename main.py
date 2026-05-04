@@ -7,8 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date as _date
 from src.services.reminder_service import iniciar_background_lembretes
+from src.services.recurring_service import iniciar_background_recorrentes
 import hashlib
 import hmac
 import os
@@ -23,6 +24,19 @@ from src.core.database import (
     buscar_entradas_mes,
     total_entrada_mes,
     deletar_entrada,
+    # novas
+    buscar_gastos_intervalo,
+    buscar_entradas_intervalo,
+    salvar_recorrente,
+    listar_recorrentes,
+    cancelar_recorrente,
+    salvar_parcela,
+    listar_parcelas,
+    cancelar_parcela,
+    salvar_limite_categoria,
+    listar_limites_categoria,
+    deletar_limite_categoria,
+    total_gasto_categoria_mes,
 )
 
 # ── Sistema de Pagamento ──────────────────────────────────────────────────────
@@ -44,7 +58,6 @@ MP_WEBHOOK_SECRET = os.environ.get("MP_WEBHOOK_SECRET", "")
 BOT_WHATSAPP_NUMBER = os.environ.get("BOT_WHATSAPP_NUMBER", "5511999999999")
 
 # Números admin — acesso ilimitado sem assinatura (sem DDI 55, padrão do banco)
-# Defina no Railway em Variables: ADMIN_NUMBERS=31999999999,11988887777
 _admin_env = os.environ.get("ADMIN_NUMBERS", "")
 ADMIN_NUMBERS: set = set(n.strip() for n in _admin_env.split(",") if n.strip())
 
@@ -73,10 +86,11 @@ def emoji_entrada_para(cat: str) -> str:
 async def lifespan(app: FastAPI):
     print("🐘 Conectando ao PostgreSQL...")
     await get_pool()
-    await create_assinatura_tables()  # ← NOVO: cria tabelas de assinatura
+    await create_assinatura_tables()
     print("✅ Banco conectado e tabelas criadas!")
     app.state.processed_ids = set()
     iniciar_background_lembretes(app, _enviar_resposta)
+    iniciar_background_recorrentes(app, _enviar_resposta)
     yield
     print("👋 Encerrando Johnny...")
 
@@ -105,6 +119,24 @@ class EditarGastoBody(BaseModel):
 
 class LimiteBody(BaseModel):
     valor: float
+
+class LimiteCategoriaBody(BaseModel):
+    categoria: str
+    valor: float
+
+class RecorrenteBody(BaseModel):
+    descricao: str
+    valor: float
+    categoria: str
+    dia_mes: int
+    forma_pagamento: str = "Desconhecido"
+
+class ParcelaBody(BaseModel):
+    descricao: str
+    valor_total: float
+    num_parcelas: int
+    categoria: str
+    forma_pagamento: str = "Cartão"
 
 
 # ── Helper Evolution ─────────────────────────────────────────────────────────
@@ -135,7 +167,6 @@ async def health():
 
 @app.get("/api/verificar/{usuario}")
 async def verificar_usuario(usuario: str):
-    # Gera todas as variações do número (com/sem 55, com/sem 9) para busca no banco
     def _variantes_num(n: str) -> list:
         v = {n}
         sem55 = n[2:] if n.startswith("55") and len(n) > 11 else n
@@ -198,6 +229,20 @@ async def resumo(usuario: str, ano: int, mes: int):
     limite = await buscar_limite(usuario)
     pct_limite = round(total_gastos / limite * 100, 1) if limite else 0
 
+    # Limites por categoria com progresso
+    limites_cat = await listar_limites_categoria(usuario)
+    limites_cat_progresso = []
+    for l in limites_cat:
+        gasto_cat = await total_gasto_categoria_mes(usuario, l["categoria"], ano, mes)
+        pct = round(gasto_cat / l["valor"] * 100, 1) if l["valor"] > 0 else 0
+        limites_cat_progresso.append({
+            "categoria": l["categoria"],
+            "limite": l["valor"],
+            "gasto": round(gasto_cat, 2),
+            "pct": pct,
+            "emoji": emoji_para(l["categoria"]),
+        })
+
     return {
         "total": round(total_gastos, 2),
         "total_entradas": round(total_entradas, 2),
@@ -206,6 +251,56 @@ async def resumo(usuario: str, ano: int, mes: int):
         "categorias": categorias,
         "limite": limite,
         "pct_limite": pct_limite,
+        "limites_categoria": limites_cat_progresso,
+    }
+
+
+@app.get("/api/resumo-intervalo/{usuario}")
+async def resumo_intervalo(usuario: str, data_inicio: str, data_fim: str):
+    """Resumo por intervalo de datas (formato YYYY-MM-DD)."""
+    try:
+        di = _date.fromisoformat(data_inicio)
+        df = _date.fromisoformat(data_fim)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Datas inválidas (use YYYY-MM-DD)")
+    if di > df:
+        raise HTTPException(status_code=400, detail="data_inicio maior que data_fim")
+
+    gastos = await buscar_gastos_intervalo(usuario, di, df)
+    entradas = await buscar_entradas_intervalo(usuario, di, df)
+
+    total_gastos = sum(float(g["valor"]) for g in gastos)
+    total_entradas = sum(float(e["valor"]) for e in entradas)
+
+    cat_map: dict[str, float] = {}
+    for g in gastos:
+        cat_map[g["categoria"]] = cat_map.get(g["categoria"], 0.0) + float(g["valor"])
+    categorias = sorted(
+        [{"nome": c, "valor": round(v, 2), "emoji": emoji_para(c)} for c, v in cat_map.items()],
+        key=lambda x: x["valor"], reverse=True
+    )
+
+    return {
+        "total_gastos": round(total_gastos, 2),
+        "total_entradas": round(total_entradas, 2),
+        "saldo": round(total_entradas - total_gastos, 2),
+        "num_gastos": len(gastos),
+        "categorias": categorias,
+        "gastos": [
+            {
+                "id": g["id"], "descricao": g["descricao"], "valor": float(g["valor"]),
+                "categoria": g["categoria"], "forma_pagamento": g["forma_pagamento"],
+                "data": g["data"].isoformat(), "fonte": g.get("fonte", "texto"),
+                "emoji": emoji_para(g["categoria"]),
+            } for g in gastos
+        ],
+        "entradas": [
+            {
+                "id": e["id"], "descricao": e["descricao"], "valor": float(e["valor"]),
+                "categoria": e["categoria"], "data": e["data"].isoformat(),
+                "fonte": e.get("fonte", "texto"), "emoji": emoji_entrada_para(e["categoria"]),
+            } for e in entradas
+        ],
     }
 
 
@@ -227,6 +322,7 @@ async def listar_gastos(usuario: str, ano: int, mes: int, categoria: Optional[st
                 "data": g["data"].isoformat(),
                 "fonte": g.get("fonte", "texto"),
                 "emoji": emoji_para(g["categoria"]),
+                "parcela_id": g.get("parcela_id"),
             }
             for g in gastos
         ]
@@ -335,10 +431,143 @@ async def evolucao(usuario: str):
 
 
 @app.post("/api/limite/{usuario}")
-async def definir_limite(usuario: str, body: LimiteBody):
+async def definir_limite_route(usuario: str, body: LimiteBody):
     if body.valor <= 0:
         raise HTTPException(status_code=400, detail="Valor inválido")
     await salvar_limite(usuario, body.valor)
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════
+# RECORRENTES — CRUD
+# ════════════════════════════════════════════════════════════════════
+
+@app.get("/api/recorrentes/{usuario}")
+async def listar_recorrentes_route(usuario: str):
+    recs = await listar_recorrentes(usuario, apenas_ativos=True)
+    return {
+        "recorrentes": [
+            {
+                "id": r["id"],
+                "descricao": r["descricao"],
+                "valor": float(r["valor"]),
+                "categoria": r["categoria"],
+                "forma_pagamento": r["forma_pagamento"],
+                "dia_mes": r["dia_mes"],
+                "ativo": r["ativo"],
+                "ultimo_aviso": r["ultimo_aviso"].isoformat() if r["ultimo_aviso"] else None,
+                "emoji": emoji_para(r["categoria"]),
+            }
+            for r in recs
+        ]
+    }
+
+
+@app.post("/api/recorrentes/{usuario}")
+async def criar_recorrente_route(usuario: str, body: RecorrenteBody):
+    if body.valor <= 0 or body.dia_mes < 1 or body.dia_mes > 31:
+        raise HTTPException(status_code=400, detail="Dados inválidos")
+    rec_id = await salvar_recorrente(
+        usuario=usuario,
+        descricao=body.descricao,
+        valor=body.valor,
+        categoria=body.categoria,
+        dia_mes=body.dia_mes,
+        forma_pagamento=body.forma_pagamento,
+    )
+    return {"ok": True, "id": rec_id}
+
+
+@app.delete("/api/recorrentes/{usuario}/{rec_id}")
+async def cancelar_recorrente_route(usuario: str, rec_id: int):
+    ok = await cancelar_recorrente(rec_id, usuario)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Recorrente não encontrado")
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════
+# PARCELAS — CRUD
+# ════════════════════════════════════════════════════════════════════
+
+@app.get("/api/parcelas/{usuario}")
+async def listar_parcelas_route(usuario: str):
+    parcs = await listar_parcelas(usuario, apenas_ativas=False)
+    return {
+        "parcelas": [
+            {
+                "id": p["id"],
+                "descricao": p["descricao"],
+                "valor_total": float(p["valor_total"]),
+                "valor_parcela": float(p["valor_parcela"]),
+                "num_parcelas": p["num_parcelas"],
+                "parcela_atual": p["parcela_atual"],
+                "categoria": p["categoria"],
+                "forma_pagamento": p["forma_pagamento"],
+                "data_compra": p["data_compra"].isoformat(),
+                "ativo": p["ativo"],
+                "emoji": emoji_para(p["categoria"]),
+            }
+            for p in parcs
+        ]
+    }
+
+
+@app.post("/api/parcelas/{usuario}")
+async def criar_parcela_route(usuario: str, body: ParcelaBody):
+    """
+    Cria uma compra parcelada e lança a 1ª parcela imediatamente.
+    """
+    if body.valor_total <= 0 or body.num_parcelas < 2:
+        raise HTTPException(status_code=400, detail="Dados inválidos")
+    from src.services.recurring_service import criar_parcelado as _criar
+    msg = await _criar(usuario, body.model_dump())
+    return {"ok": True, "mensagem": msg}
+
+
+@app.delete("/api/parcelas/{usuario}/{parcela_id}")
+async def cancelar_parcela_route(usuario: str, parcela_id: int):
+    ok = await cancelar_parcela(parcela_id, usuario)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Parcela não encontrada")
+    return {"ok": True}
+
+
+# ════════════════════════════════════════════════════════════════════
+# LIMITES POR CATEGORIA — CRUD
+# ════════════════════════════════════════════════════════════════════
+
+@app.get("/api/limites-categoria/{usuario}")
+async def listar_limites_cat_route(usuario: str):
+    hoje = _date.today()
+    limites = await listar_limites_categoria(usuario)
+    out = []
+    for l in limites:
+        gasto = await total_gasto_categoria_mes(usuario, l["categoria"], hoje.year, hoje.month)
+        pct = round(gasto / l["valor"] * 100, 1) if l["valor"] > 0 else 0
+        out.append({
+            "categoria": l["categoria"],
+            "valor": l["valor"],
+            "gasto": round(gasto, 2),
+            "pct": pct,
+            "emoji": emoji_para(l["categoria"]),
+        })
+    return {"limites": out}
+
+
+@app.post("/api/limites-categoria/{usuario}")
+async def salvar_limite_cat_route(usuario: str, body: LimiteCategoriaBody):
+    if body.valor <= 0:
+        raise HTTPException(status_code=400, detail="Valor inválido")
+    await salvar_limite_categoria(usuario, body.categoria, body.valor)
+    return {"ok": True}
+
+
+@app.delete("/api/limites-categoria/{usuario}/{categoria}")
+async def deletar_limite_cat_route(usuario: str, categoria: str):
+    ok = await deletar_limite_categoria(usuario, categoria)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Limite não encontrado")
     return {"ok": True}
 
 
@@ -376,23 +605,16 @@ async def reset_usuario(usuario: str, senha: str = ""):
 
 
 # ════════════════════════════════════════════════════════════════════
-# CRIAR PREFERÊNCIA — gera link de pagamento personalizado com o
-# WhatsApp do comprador embutido no external_reference
+# CRIAR PREFERÊNCIA — Mercado Pago
 # ════════════════════════════════════════════════════════════════════
 
 class PreferenciaBody(BaseModel):
-    plano: str          # "mensal" ou "anual"
-    whatsapp: str       # ex: "5531999999999" ou "31999999999"
-    email: str = ""     # email do comprador para fallback
+    plano: str
+    whatsapp: str
+    email: str = ""
 
 @app.post("/criar-preferencia")
 async def criar_preferencia(body: PreferenciaBody):
-    """
-    Chamado pela landing page antes de redirecionar ao Mercado Pago.
-    Cria uma preferência de pagamento com o número de WhatsApp do
-    comprador no campo external_reference — assim o webhook consegue
-    identificar para quem ativar a assinatura.
-    """
     if not MP_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="MP_ACCESS_TOKEN não configurado")
 
@@ -400,10 +622,9 @@ async def criar_preferencia(body: PreferenciaBody):
     plano = body.plano if body.plano in precos else "mensal"
     valor = precos[plano]
 
-    # Normaliza o número: apenas dígitos, sem DDI 55
     numero_limpo = ''.join(filter(str.isdigit, body.whatsapp))
     if numero_limpo.startswith("55") and len(numero_limpo) > 11:
-        numero_limpo = numero_limpo[2:]  # remove o 55 se vier com DDI
+        numero_limpo = numero_limpo[2:]
 
     print(f"🔗 Criando preferência | plano={plano} | whatsapp={numero_limpo}")
 
@@ -419,7 +640,7 @@ async def criar_preferencia(body: PreferenciaBody):
                         "unit_price": valor,
                         "currency_id": "BRL"
                     }],
-                    "external_reference": numero_limpo,   # ← número WA do comprador (sem DDI 55)
+                    "external_reference": numero_limpo,
                     "metadata": {"plano": plano, "whatsapp": numero_limpo, "email": body.email},
                     "back_urls": {
                         "success": "https://wa.me/" + BOT_WHATSAPP_NUMBER + "?text=Oi%2C+acabei+de+pagar!",
@@ -445,15 +666,10 @@ async def criar_preferencia(body: PreferenciaBody):
 
 
 # ════════════════════════════════════════════════════════════════════
-# WEBHOOK MERCADO PAGO — geração de token após pagamento aprovado
+# WEBHOOK MERCADO PAGO
 # ════════════════════════════════════════════════════════════════════
 
 async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_acesso: str):
-    """
-    Envia email com o link de ativação do WhatsApp.
-    Usa a API do Resend (resend.com) — grátis até 3000 emails/mês.
-    Configure RESEND_API_KEY no Railway.
-    """
     RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
     EMAIL_FROM = os.environ.get("EMAIL_FROM", "noreply@seudominio.com.br")
 
@@ -545,15 +761,8 @@ async def _enviar_email_ativacao(email: str, token: str, plano_label: str, link_
 
 @app.post("/webhook/pagamento")
 async def webhook_pagamento(request: Request):
-    """
-    Recebe notificações do Mercado Pago quando um pagamento é aprovado.
-    Configure em: https://www.mercadopago.com.br/developers/panel/webhooks
-    URL: https://SEU_APP.railway.app/webhook/pagamento
-    Evento: payment
-    """
     body_bytes = await request.body()
 
-    # Verificação de assinatura (segurança)
     if MP_WEBHOOK_SECRET:
         signature = request.headers.get("x-signature", "")
         request_id = request.headers.get("x-request-id", "")
@@ -572,7 +781,6 @@ async def webhook_pagamento(request: Request):
                 return {"ok": False}
         except Exception as e:
             print(f"⚠️ Erro na verificação MP: {e}")
-            # Se a verificação falhar por erro inesperado, bloqueia por segurança
             return {"ok": False}
 
     data = json.loads(body_bytes)
@@ -584,7 +792,6 @@ async def webhook_pagamento(request: Request):
     if not payment_id:
         return {"ok": True}
 
-    # Busca detalhes do pagamento
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -603,7 +810,6 @@ async def webhook_pagamento(request: Request):
 
     valor = float(pagamento.get("transaction_amount", 0))
 
-    # Identifica o plano: 1º pelo metadata (mais confiável), depois pelo valor
     metadata = pagamento.get("metadata", {})
     if metadata.get("plano"):
         plano = metadata["plano"]
@@ -612,13 +818,9 @@ async def webhook_pagamento(request: Request):
     else:
         plano = "mensal"
 
-    # ─── NOVO: pega o WhatsApp do external_reference (definido pela landing page) ───
-    # Fallback 1: metadata.whatsapp
-    # Fallback 2: campo phone do payer (pouco confiável)
     external_ref = pagamento.get("external_reference", "")
     whatsapp_meta = metadata.get("whatsapp", "")
     telefone_payer = pagamento.get("payer", {}).get("phone", {}).get("number", "")
-    # Prioridade de email: metadata (digitado pelo usuário) > payer do MP
     email_meta = metadata.get("email", "")
     email_payer = email_meta or pagamento.get("payer", {}).get("email", "")
 
@@ -626,7 +828,6 @@ async def webhook_pagamento(request: Request):
     print(f"📱 WhatsApp identificado: '{telefone_raw}' "
           f"(external_ref='{external_ref}', meta='{whatsapp_meta}', payer='{telefone_payer}')")
 
-    # Gera token e salva
     token = gerar_token()
     await salvar_token(token=token, plano=plano, valor_pago=valor, payment_id=payment_id)
 
@@ -635,7 +836,6 @@ async def webhook_pagamento(request: Request):
 
     print(f"✅ Token gerado: {token} | Plano: {plano_label} | Link: {link_acesso}")
 
-    # Envia email com link de ativação (funciona mesmo se o cliente nunca interagiu com o bot)
     if email_payer and "@" in email_payer and "testuser" not in email_payer.lower():
         await _enviar_email_ativacao(
             email=email_payer,
@@ -644,33 +844,28 @@ async def webhook_pagamento(request: Request):
             link_acesso=link_acesso
         )
 
-    # Se encontrou o WhatsApp, ativa automaticamente e manda mensagem
     if telefone_raw:
-        # Normaliza: apenas dígitos, sem DDI 55 (padrão de armazenamento do bot)
         numero_limpo = ''.join(filter(str.isdigit, telefone_raw))
         if numero_limpo.startswith("55") and len(numero_limpo) > 11:
-            numero_limpo = numero_limpo[2:]  # remove 55 se vier com DDI
+            numero_limpo = numero_limpo[2:]
 
-        # Gera variações com e sem o nono dígito para garantir ativação
         variacoes_numero = [numero_limpo]
-        if len(numero_limpo) == 10:  # sem o 9 → adiciona versão com 9
+        if len(numero_limpo) == 10:
             com9 = numero_limpo[:2] + "9" + numero_limpo[2:]
             variacoes_numero.append(com9)
-        elif len(numero_limpo) == 11:  # com o 9 → adiciona versão sem 9
+        elif len(numero_limpo) == 11:
             sem9 = numero_limpo[:2] + numero_limpo[3:]
             variacoes_numero.append(sem9)
 
-        # Tenta ativar com cada variação até uma funcionar
         resultado = None
         jid = None
         for num in variacoes_numero:
-            # Salva no banco sem DDI, mas manda mensagem com DDI 55
             jid = f"{num}@s.whatsapp.net"
             jid_com55 = f"55{num}@s.whatsapp.net" if not num.startswith("55") else f"{num}@s.whatsapp.net"
             resultado = await ativar_assinatura(jid, token)
             if resultado["ok"]:
                 print(f"✅ Ativação com número: {num}")
-                jid = jid_com55  # usa o jid com 55 para enviar mensagem
+                jid = jid_com55
                 break
             print(f"⚠️ Ativação falhou para {num}, tentando variação...")
 
@@ -687,16 +882,13 @@ async def webhook_pagamento(request: Request):
                 f"Vou cuidar da sua grana com você!\n\n"
                 f"Agora para começar digite *ajuda* e entenda todas as funcionalidades!"
             )
-            
         else:
-            # Token gerado mas ativação automática falhou — manda o token para ativar manualmente
             await _enviar_resposta(jid,
                 f"✅ Pagamento confirmado!\n\n"
                 f"Seu token de acesso: *{token}*\n\n"
                 f"Me envie o token acima para ativar seu acesso ao Johnny 🐹"
             )
 
-    # Se não encontrou WhatsApp de jeito nenhum, loga para o admin
     if not telefone_raw:
         print(f"⚠️ Sem WhatsApp identificado no pagamento. Token gerado mas não enviado.")
         print(f"   Token: {token} | Plano: {plano_label} | Valor: R$ {valor:.2f}")
@@ -705,11 +897,6 @@ async def webhook_pagamento(request: Request):
 
     return {"ok": True, "token": token}
 
-
-# ════════════════════════════════════════════════════════════════════
-# ENDPOINT DE TESTE — força processar um payment_id real
-# Remova em produção ou proteja com senha
-# ════════════════════════════════════════════════════════════════════
 
 @app.get("/testar-pagamento/{payment_id}")
 async def testar_pagamento(payment_id: str, senha: str = ""):
@@ -734,13 +921,8 @@ async def testar_pagamento(payment_id: str, senha: str = ""):
     }
 
 
-# ════════════════════════════════════════════════════════════════════
-# PAINEL ADMIN — assinantes
-# ════════════════════════════════════════════════════════════════════
-
 @app.get("/admin/assinantes")
 async def admin_assinantes(senha: str = ""):
-    """Retorna todos os assinantes com status e dias restantes."""
     if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
         raise HTTPException(status_code=403, detail="Acesso negado")
     pool = await get_pool()
@@ -765,9 +947,7 @@ async def admin_assinantes(senha: str = ""):
         if expira.tzinfo is None:
             expira = expira.replace(tzinfo=timezone.utc)
         dias = (expira - agora).days
-        # Formata número para link wa.me
         num = r["usuario"].replace("@s.whatsapp.net", "")
-        # Tenta adicionar 55 se não tiver para link wa.me
         num_wa = num if num.startswith("55") else f"55{num}"
         resultado.append({
             "usuario": num,
@@ -822,8 +1002,7 @@ async def evolution_webhook(request: Request, any: str = None):
 
     text_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text")
 
-    # ── Guard de acesso ──────────────────────────────────────────────────────
-    # Se o usuário mandou um token de ativação
+    # ── Guard de acesso ──
     if text_body and text_body.strip().upper().startswith("JOHNNY-"):
         token_enviado = text_body.strip().upper()
         resultado = await ativar_assinatura(remote_jid, token_enviado)
@@ -854,32 +1033,24 @@ async def evolution_webhook(request: Request, any: str = None):
             )
         return {"status": "ok"}
 
-    # Verifica acesso antes de processar qualquer mensagem
-    # Números admin pulam a verificação de assinatura
-    # Gera todas as variações possíveis do número para comparar com ADMIN_NUMBERS:
-    # com/sem DDI 55, com/sem o nono dígito (MG e outros estados)
     _jid_num = remote_jid.replace("@s.whatsapp.net", "")
     _jid_sem55 = _jid_num[2:] if _jid_num.startswith("55") and len(_jid_num) > 11 else _jid_num
 
     def _variantes(n: str) -> set:
         v = {n}
-        # adiciona/remove 55
         if n.startswith("55"):
             v.add(n[2:])
         else:
             v.add("55" + n)
-        # para cada variante, adiciona/remove o 9 após o DDD (2 dígitos)
         extras = set()
         for x in v:
-            digits = x.lstrip("55") if x.startswith("55") else x
-            # remove 55 prefix para trabalhar com DDD+número
             base = x[2:] if x.startswith("55") else x
-            if len(base) == 11 and base[2] == "9":      # tem o 9 → remove
+            if len(base) == 11 and base[2] == "9":
                 extras.add(x[:len(x)-9] + base[3:] if x.startswith("55") else base[:2] + base[3:])
                 sem9 = base[:2] + base[3:]
                 extras.add(sem9)
                 extras.add("55" + sem9)
-            elif len(base) == 10:                         # sem o 9 → adiciona
+            elif len(base) == 10:
                 com9 = base[:2] + "9" + base[2:]
                 extras.add(com9)
                 extras.add("55" + com9)
@@ -911,7 +1082,6 @@ async def evolution_webhook(request: Request, any: str = None):
                     f"👉 https://www.meujohnny.com.br/"
                 )
             return {"status": "ok"}
-    # ── Fim do guard ──────────────────────────────────────────────────────────
 
     response = None
 
