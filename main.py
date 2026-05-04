@@ -46,6 +46,7 @@ from src.core.assinatura_db import (
     ativar_assinatura,
     verificar_acesso,
     gerar_token,
+    buscar_token_por_payment_id,
 )
 
 from src.handlers.text_handler import handle_text_message
@@ -828,8 +829,14 @@ async def webhook_pagamento(request: Request):
     print(f"📱 WhatsApp identificado: '{telefone_raw}' "
           f"(external_ref='{external_ref}', meta='{whatsapp_meta}', payer='{telefone_payer}')")
 
-    token = gerar_token()
-    await salvar_token(token=token, plano=plano, valor_pago=valor, payment_id=payment_id)
+    # ── BUG FIX 1: Idempotência — reutiliza token se webhook disparar múltiplas vezes ──
+    token_existente = await buscar_token_por_payment_id(payment_id)
+    if token_existente:
+        token = token_existente
+        print(f"♻️ Token já existia para payment_id={payment_id}: {token} (webhook duplicado ignorado)")
+    else:
+        token = gerar_token()
+        await salvar_token(token=token, plano=plano, valor_pago=valor, payment_id=payment_id)
 
     link_acesso = f"https://wa.me/{BOT_WHATSAPP_NUMBER}?text={token}"
     plano_label = "Anual 🎉" if plano == "anual" else "Mensal"
@@ -846,28 +853,33 @@ async def webhook_pagamento(request: Request):
 
     if telefone_raw:
         numero_limpo = ''.join(filter(str.isdigit, telefone_raw))
+        # Normaliza para sempre ter o DDI 55
         if numero_limpo.startswith("55") and len(numero_limpo) > 11:
-            numero_limpo = numero_limpo[2:]
+            numero_sem55 = numero_limpo[2:]
+        else:
+            numero_sem55 = numero_limpo
 
-        variacoes_numero = [numero_limpo]
-        if len(numero_limpo) == 10:
-            com9 = numero_limpo[:2] + "9" + numero_limpo[2:]
+        # Gera variações sem DDI (para tentar ativação)
+        variacoes_numero = [numero_sem55]
+        if len(numero_sem55) == 10:
+            com9 = numero_sem55[:2] + "9" + numero_sem55[2:]
             variacoes_numero.append(com9)
-        elif len(numero_limpo) == 11:
-            sem9 = numero_limpo[:2] + numero_limpo[3:]
+        elif len(numero_sem55) == 11:
+            sem9 = numero_sem55[:2] + numero_sem55[3:]
             variacoes_numero.append(sem9)
 
         resultado = None
         jid = None
         for num in variacoes_numero:
-            jid = f"{num}@s.whatsapp.net"
-            jid_com55 = f"55{num}@s.whatsapp.net" if not num.startswith("55") else f"{num}@s.whatsapp.net"
+            # ── BUG FIX 2: Salva assinatura SEMPRE com DDI 55 ──
+            # A Evolution entrega mensagens com 55XXXXXXXXXX, então precisamos
+            # que a assinatura fique salva nesse formato para verificar_acesso funcionar.
+            jid = f"55{num}@s.whatsapp.net"
             resultado = await ativar_assinatura(jid, token)
             if resultado["ok"]:
-                print(f"✅ Ativação com número: {num}")
-                jid = jid_com55
+                print(f"✅ Ativação com número: 55{num}")
                 break
-            print(f"⚠️ Ativação falhou para {num}, tentando variação...")
+            print(f"⚠️ Ativação falhou para 55{num}, tentando variação...")
 
         if resultado["ok"]:
             dias = resultado.get("expira") and (resultado["expira"] - datetime.now(timezone.utc)).days
