@@ -840,7 +840,7 @@ async def evolution_webhook(request: Request, any: str = None):
                 f"📋 Plano: {plano_label}\n"
                 f"📅 Válido por {dias} dias{extra_msg}\n\n"
                 f"Seja bem-vindo ao Johnny 🐹\n"
-                f"Me manda um gasto pra começar! Ex: _gastei 15 reais no mercado_"
+                f"Digite *ajuda* para começar!"
             )
         elif resultado["motivo"] == "token_invalido":
             await _enviar_resposta(remote_jid,
