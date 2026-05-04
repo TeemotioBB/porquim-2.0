@@ -376,10 +376,10 @@ async def _processar_recorrentes_e_parcelas_do_dia(enviar_func):
         )
         remote_jid = usuario if "@" in usuario else f"{usuario}@s.whatsapp.net"
         try:
-            await enviar_func(remote_jid, msg)
+            # Marca ANTES de enviar: se o envio falhar, o retry não duplica
             await marcar_aviso_recorrente(rec_id, hoje)
-            # Salva intenção pendente para que "sim" lance o gasto
             await salvar_intencao_pendente(usuario, f"recorrente:{rec_id}")
+            await enviar_func(remote_jid, msg)
             print(f"🔁 Aviso recorrente #{rec_id} enviado para {usuario}")
         except Exception as e:
             print(f"❌ Erro aviso recorrente #{rec_id}: {e}")
