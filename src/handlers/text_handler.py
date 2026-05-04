@@ -27,6 +27,8 @@ from src.core.database import (
     salvar_intencao_pendente, limpar_intencao_pendente,
     cancelar_recorrente, buscar_recorrente,
     cancelar_parcela, buscar_parcela,
+    resetar_usuario,
+    salvar_resumo_ids, buscar_resumo_ids,
 )
 from src.services.ia_service import processar_gasto_texto as _extrair
 from src.core.config import settings
@@ -40,41 +42,37 @@ _grok = AsyncOpenAI(
 
 AJUDA = """👋 Oi! Eu sou o Johnny 🐹💚
 Seu assistente financeiro aqui no WhatsApp.
-*(Entendo também por áudio ou foto 👀)*
 
-💸 *Registrar um gasto:*
-_"Uber 27"_
-_"Almoço 35 cartão"_
-_"iFood 52 pix"_
+💸 *Registrar gastos:*
+_"Uber 27"_ ou _"Almoço 35 cartão"_
+(também por áudio ou foto 👀)
 
-💰 *Recebeu dinheiro?*
-_"Salário 3200"_
-_"Recebi 500 de freela"_
+💰 *Entrou dinheiro?*
+_"Salário 3000"_ ou _"Recebi 500"_
 
-💳 *Compra parcelada:*
-_"TV 1800 em 12x cartão"_
+💳 *Compras parceladas:*
+_"TV 1200 em 6x cartão"_
 _"Sapato 300 em 3x"_
 
-🔁 *Gasto que se repete todo mês:*
+🔁 *Gastos recorrentes:*
+_"Todo dia 10 faculdade 120"_
 _"Aluguel 1500 todo dia 5"_
-_"Academia 100 todo dia 10"_
 
-🎯 *Definir um limite de gastos:*
-_"Meu limite do mês é 3000"_
-_"Quero gastar no máximo 400 em alimentação"_
-_"Limite de roupas 200"_
+🎯 *Limites:*
+_"Limite 2000"_ (geral)
+_"Limite roupas 200"_ (por categoria)
 
-📊 *Ver seus gastos:*
+📊 *Resumos:*
 *resumo* · *resumo hoje* · *resumo ontem*
 *resumo de janeiro* · *resumo mês passado*
 
-🔔 *Criar um lembrete:*
-_"Me lembra de pagar o boleto amanhã às 10h"_
+🔔 *Lembretes:*
+_"Reunião amanhã 14h"_
 
 📋 *Listar:*
 *recorrentes* · *parcelas* · *limites* · *meus lembretes*
 
-📲 *Seu Dashboard completo:*
+📲 *Dashboard completo:*
 👉 https://dashboard-porquim-theta.vercel.app
 
 Um hábito simples que muda tudo 💚"""
@@ -109,10 +107,6 @@ MESES_NOMES = {
     "agosto": 8, "setembro": 9, "outubro": 10,
     "novembro": 11, "dezembro": 12
 }
-
-# Resumo em RAM (só para a sessão de edição/remoção por número)
-_resumo_gastos: dict[str, list] = {}
-
 
 # ─── Detecção de intenção: GASTO ─────────────────────────────────────────────
 
@@ -328,6 +322,18 @@ async def handle_text_message(message: dict) -> dict:
             if intencao.startswith("limite:"):
                 valor = float(intencao.split(":")[1])
                 return {"type": "text", "content": await definir_limite(numero, valor)}
+            if intencao == "resetar_tudo":
+                totais = await resetar_usuario(numero)
+                linhas = ["🗑️ *Reset concluído! Todos os seus dados foram apagados.*\n"]
+                if totais["gastos"]:       linhas.append(f"• {totais['gastos']} gasto(s)")
+                if totais["entradas"]:     linhas.append(f"• {totais['entradas']} entrada(s)")
+                if totais["parcelas"]:     linhas.append(f"• {totais['parcelas']} parcela(s)")
+                if totais["recorrentes"]:  linhas.append(f"• {totais['recorrentes']} recorrente(s)")
+                if totais["limites"] or totais["limites_cat"]:
+                    linhas.append(f"• Limites removidos")
+                if totais["lembretes"]:    linhas.append(f"• {totais['lembretes']} lembrete(s)")
+                linhas.append("\n_Pode começar do zero quando quiser! 🐹_")
+                return {"type": "text", "content": "\n".join(linhas)}
             if intencao.startswith("recorrente:"):
                 # Lança o recorrente como gasto
                 rec_id = int(intencao.split(":")[1])
@@ -366,29 +372,30 @@ async def handle_text_message(message: dict) -> dict:
         if intervalo:
             ini, fim, titulo = intervalo
             conteudo, gastos = await gerar_resumo_intervalo(numero, ini, fim, titulo)
-            _resumo_gastos[numero] = gastos
+            await salvar_resumo_ids(numero, [g["id"] for g in gastos])
             return {"type": "text", "content": conteudo}
 
     # ── Resumo (mês) ──────────────────────────────────────────────────────────
     if texto_lower.startswith("resumo") or texto_lower in ["relatorio", "relatório", "gastos", "ver gastos"]:
         ano, mes = _parse_mes_resumo(texto_lower)
         conteudo, gastos = await gerar_resumo(numero, ano=ano, mes=mes)
-        _resumo_gastos[numero] = gastos
+        await salvar_resumo_ids(numero, [g["id"] for g in gastos])
         return {"type": "text", "content": conteudo}
 
     # ── Remover pelo número do resumo: "remover 2" ────────────────────────────
     match_rem_num = re.match(r"^remover\s+(\d+)$", texto_lower)
     if match_rem_num:
         idx = int(match_rem_num.group(1)) - 1
-        gastos = _resumo_gastos.get(numero, [])
-        if not gastos:
+        ids = await buscar_resumo_ids(numero)
+        if not ids:
             return {"type": "text", "content": "❌ Faça um *resumo* primeiro para ver os gastos numerados."}
-        if idx < 0 or idx >= len(gastos):
-            return {"type": "text", "content": f"❌ Número inválido. Escolha entre 1 e {len(gastos)}."}
-        g = gastos[idx]
+        if idx < 0 or idx >= len(ids):
+            return {"type": "text", "content": f"❌ Número inválido. Escolha entre 1 e {len(ids)}."}
+        g = await buscar_gasto_por_id(ids[idx], numero)
+        if not g:
+            return {"type": "text", "content": "❌ Gasto não encontrado ou já foi removido."}
         ok = await deletar_gasto(g["id"], numero)
         if ok:
-            _resumo_gastos[numero] = [x for x in gastos if x["id"] != g["id"]]
             return {"type": "text", "content": f"🗑️ *Gasto removido!*\n\n_{g['descricao']} · R$ {float(g['valor']):.2f}_"}
         return {"type": "text", "content": "❌ Não consegui remover. Tente novamente."}
 
@@ -441,14 +448,14 @@ async def handle_text_message(message: dict) -> dict:
     if match_edit_num:
         idx = int(match_edit_num.group(1)) - 1
         novo_texto = match_edit_num.group(2)
-        gastos = _resumo_gastos.get(numero, [])
-        if not gastos:
+        ids = await buscar_resumo_ids(numero)
+        if not ids:
             return {"type": "text", "content": "❌ Faça um *resumo* primeiro para ver os gastos numerados."}
-        if idx < 0 or idx >= len(gastos):
-            return {"type": "text", "content": f"❌ Número inválido. Escolha entre 1 e {len(gastos)}."}
+        if idx < 0 or idx >= len(ids):
+            return {"type": "text", "content": f"❌ Número inválido. Escolha entre 1 e {len(ids)}."}
         try:
             novos_dados = await _extrair(novo_texto)
-            ok = await atualizar_gasto(gastos[idx]["id"], numero, novos_dados)
+            ok = await atualizar_gasto(ids[idx], numero, novos_dados)
             if ok:
                 return {"type": "text", "content": f"✏️ *Gasto atualizado!*\n\n📍 {novos_dados['descricao']}\n💰 R$ {float(novos_dados['valor']):.2f}\n🏷️ {novos_dados['categoria']}\n💳 {novos_dados['forma_pagamento']}"}
         except Exception as e:
@@ -617,6 +624,25 @@ async def handle_text_message(message: dict) -> dict:
             return {"type": "text", "content": f"🗑️ *Lembrete #{lembrete_id} cancelado!*"}
         return {"type": "text", "content": f"❌ Lembrete #{lembrete_id} não encontrado ou já foi enviado."}
 
+    # ── Resetar todos os dados do usuário ────────────────────────────────────
+    if texto_lower in ("resetar", "reset", "apagar tudo", "zerar tudo", "limpar tudo"):
+        await salvar_intencao_pendente(numero, "resetar_tudo")
+        return {
+            "type": "text",
+            "content": (
+                "⚠️ *ATENÇÃO: Essa ação é irreversível!*\n\n"
+                "Ao confirmar, serão apagados permanentemente:\n"
+                "• Todos os seus gastos\n"
+                "• Todas as suas entradas\n"
+                "• Seus limites (geral e por categoria)\n"
+                "• Compras parceladas\n"
+                "• Gastos recorrentes\n"
+                "• Lembretes agendados\n\n"
+                "Tem certeza que deseja apagar *tudo*?\n"
+                "Responda *sim* para confirmar ou *não* para cancelar."
+            )
+        }
+
     # ── Detecção de RECORRENTE (antes de gasto comum) ────────────────────────
     if detectar_recorrente(texto):
         dados = await parsear_recorrente(texto, _grok)
@@ -625,10 +651,10 @@ async def handle_text_message(message: dict) -> dict:
         return {
             "type": "text",
             "content": (
-                "🔁 Não consegui entender o recorrente. Tenta assim:\n"
-                "_'Todo dia 10 faculdade 120'_\n"
-                "_'Aluguel 1500 todo dia 5'_\n"
-                "_'Academia 80 todo mês dia 15 cartão'_"
+                "🔁 Entendi que é um gasto recorrente!\n\n"
+                "Mas preciso saber: *todo dia quanto do mês?*\n\n"
+                "Me manda de novo com o dia, por exemplo:\n"
+                f"_\"{texto.strip()} todo dia 10\"_"
             )
         }
 
@@ -788,7 +814,7 @@ async def handle_text_message(message: dict) -> dict:
             elif acao == "RESUMO":
                 hoje = date.today()
                 conteudo, gastos = await gerar_resumo(numero, ano=hoje.year, mes=hoje.month)
-                _resumo_gastos[numero] = gastos
+                await salvar_resumo_ids(numero, [g["id"] for g in gastos])
                 return {"type": "text", "content": conteudo}
 
             elif acao == "ENTRADA":
