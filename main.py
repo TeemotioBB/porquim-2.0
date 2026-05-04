@@ -672,8 +672,12 @@ async def webhook_pagamento(request: Request):
                 f"✅ Pagamento confirmado! Bem-vindo ao Johnny 🐹\n\n"
                 f"📋 Plano: {plano_label}\n"
                 f"📅 Válido por {dias} dias{extra_msg}\n\n"
+                f"👋 Oi! Eu sou o Johnny 🐹💚\n"
+                f"Seu assistente financeiro aqui no WhatsApp.\n"
+                f"Vou cuidar da sua grana com você!\n\n"
                 f"Agora para começar digite *ajuda* e entenda todas as funcionalidades!"
             )
+            
         else:
             # Token gerado mas ativação automática falhou — manda o token para ativar manualmente
             await _enviar_resposta(jid,
@@ -894,7 +898,7 @@ async def evolution_webhook(request: Request, any: str = None):
                     f"Renove agora para continuar usando o Johnny 🐹:\n"
                     f"• 💰 Mensal: R$ 19,90\n"
                     f"• 🎉 Anual: R$ 67,00\n\n"
-                    f"👉 https://maycon.app"
+                    f"👉 https://www.meujohnny.com.br/"
                 )
             return {"status": "ok"}
     # ── Fim do guard ──────────────────────────────────────────────────────────
