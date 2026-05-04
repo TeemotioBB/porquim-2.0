@@ -47,6 +47,8 @@ def detectar_recorrente(texto: str) -> bool:
         r"\brecorrente\b",
         r"\btodos?\s+os\s+meses\b",                            # "todos os meses"
         r"\bcada\s+m[eê]s\b",                                  # "cada mês"
+        r"\btodo\s+dia\b",                                     # "todo dia" sem número (áudio)
+        r"\btodo\s+m[eê]s\b",                                  # "todo mês" sem número
     ]
     return any(re.search(p, t_norm) for p in padroes)
 
@@ -97,6 +99,15 @@ def _normalizar_numeros_extenso(texto: str) -> str:
 async def parsear_recorrente(texto: str, grok_client) -> dict | None:
     """Usa o Grok para extrair: descricao, valor, categoria, dia_mes, forma_pagamento."""
     import json
+
+    # Normaliza transcrições de áudio onde o STT converte "todo dia 10" em "todo dia R$ 10,00"
+    # Ex: "todo dia R$ 10,00, R$ 120,00" → "todo dia 10, R$ 120,00"
+    texto = re.sub(
+        r'(todo\s+(?:dia\s+|m[eê]s\s+(?:no\s+)?dia\s+))R\$\s*(\d{1,2})[,.]?\d*',
+        r'\g<1>\2',
+        texto,
+        flags=re.IGNORECASE
+    )
     prompt = f"""Você extrai informações de gastos RECORRENTES (mensais) em português.
 
 Responda APENAS com JSON válido, sem markdown:
