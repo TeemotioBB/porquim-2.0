@@ -247,45 +247,72 @@ async def processar_lembrete(texto: str, usuario: str) -> str:
 # ─── Background task ──────────────────────────────────────────────────────────
 
 async def _disparar_lembretes(enviar_func):
+    """
+    Verifica lembretes a cada 30s e dispara avisos em 3 momentos:
+    - 1h antes    → aviso antecipado
+    - 30min antes → aviso de atenção
+    - Na hora     → aviso final
+    """
     pool = await get_pool()
     while True:
         try:
             agora = datetime.now(TZ_BR)
-            ate = agora + timedelta(seconds=45)
 
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
-                    SELECT id, usuario, mensagem, horario
+                    SELECT id, usuario, mensagem, horario,
+                           COALESCE(aviso_1h, FALSE) as aviso_1h,
+                           COALESCE(aviso_30min, FALSE) as aviso_30min
                     FROM lembretes
                     WHERE enviado = FALSE
-                      AND horario <= $1
+                      AND horario >= $1
                     ORDER BY horario ASC
                     LIMIT 50
-                """, ate)
+                """, agora)
 
                 for row in rows:
                     lembrete_id = row["id"]
                     usuario = row["usuario"]
                     mensagem = row["mensagem"]
                     horario = row["horario"]
-
-                    agora_check = datetime.now(TZ_BR)
-                    if horario > agora_check:
-                        await asyncio.sleep((horario - agora_check).total_seconds())
-
-                    texto_envio = f"🐹 *Oi! Tô aqui pra te lembrar:*\n\n📌 {mensagem.capitalize()}"
+                    aviso_1h = row["aviso_1h"]
+                    aviso_30min = row["aviso_30min"]
                     remote_jid = usuario if "@" in usuario else f"{usuario}@s.whatsapp.net"
 
-                    try:
-                        await enviar_func(remote_jid, texto_envio)
-                        print(f"✅ Lembrete #{lembrete_id} enviado para {usuario}")
-                    except Exception as e:
-                        print(f"❌ Erro ao enviar lembrete #{lembrete_id}: {e}")
+                    agora_now = datetime.now(TZ_BR)
+                    diff = (horario - agora_now).total_seconds()
 
-                    await conn.execute(
-                        "UPDATE lembretes SET enviado=TRUE WHERE id=$1",
-                        lembrete_id
-                    )
+                    # ── Aviso 1h antes ──
+                    if not aviso_1h and 3540 <= diff <= 3660:
+                        texto = f"🐹 *Daqui 1 hora:*\n\n📌 {mensagem.capitalize()} ⏰"
+                        try:
+                            await enviar_func(remote_jid, texto)
+                            await conn.execute("UPDATE lembretes SET aviso_1h=TRUE WHERE id=$1", lembrete_id)
+                            print(f"⏰ Lembrete #{lembrete_id} — aviso 1h antes")
+                        except Exception as e:
+                            print(f"❌ Erro aviso 1h #{lembrete_id}: {e}")
+
+                    # ── Aviso 30min antes ──
+                    elif not aviso_30min and 1740 <= diff <= 1860:
+                        texto = f"🐹 *Daqui 30 minutos:*\n\n📌 {mensagem.capitalize()} ⏰"
+                        try:
+                            await enviar_func(remote_jid, texto)
+                            await conn.execute("UPDATE lembretes SET aviso_30min=TRUE WHERE id=$1", lembrete_id)
+                            print(f"⏰ Lembrete #{lembrete_id} — aviso 30min antes")
+                        except Exception as e:
+                            print(f"❌ Erro aviso 30min #{lembrete_id}: {e}")
+
+                    # ── Aviso na hora ──
+                    elif diff <= 45:
+                        if diff > 0:
+                            await asyncio.sleep(diff)
+                        texto = f"🐹 *Oi! Tô aqui pra te lembrar:*\n\n📌 {mensagem.capitalize()}"
+                        try:
+                            await enviar_func(remote_jid, texto)
+                            await conn.execute("UPDATE lembretes SET enviado=TRUE WHERE id=$1", lembrete_id)
+                            print(f"✅ Lembrete #{lembrete_id} enviado para {usuario}")
+                        except Exception as e:
+                            print(f"❌ Erro ao enviar lembrete #{lembrete_id}: {e}")
 
         except Exception as e:
             print(f"❌ Erro no loop de lembretes: {e}")
