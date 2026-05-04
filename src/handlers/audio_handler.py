@@ -1,10 +1,12 @@
 import base64
+import re
 import httpx
 from src.services.ia_service import processar_gasto_audio, transcrever_audio, processar_entrada_texto
 from src.services.report_service import verificar_limite_pos_gasto
+from src.services.recurring_service import detectar_recorrente, detectar_parcelado
+from src.services.reminder_service import _detectar_lembrete_rapido, detectar_lembrete_implicito
 from src.core.database import salvar_gasto, salvar_entrada, salvar_memoria
 from src.core.config import settings
-import re
 
 CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 
@@ -44,6 +46,40 @@ def _detectar_entrada_texto(texto: str) -> bool:
     ))
 
 
+def _precisa_text_handler(transcricao: str) -> bool:
+    """
+    Decide se a transcrição deve ser roteada pelo text_handler ao invés
+    do fluxo direto de gasto. True quando contém comandos, parcelado,
+    recorrente, limite por categoria, resumos, lembretes, listagens, etc.
+    """
+    t = transcricao.lower().strip()
+
+    # Comandos diretos (palavra única ou prefixo)
+    comandos_simples = (
+        "ajuda", "menu", "ola", "olá", "oi",
+        "resumo", "limite", "limites",
+        "recorrentes", "parcelas",
+        "remover", "editar",
+        "cancelar"
+    )
+    if any(t.startswith(c) for c in comandos_simples):
+        return True
+
+    # Parcelado / recorrente
+    if detectar_parcelado(t) or detectar_recorrente(t):
+        return True
+
+    # Limite (contém "limite", "teto", "máximo", "quero gastar")
+    if re.search(r"\b(limite|teto|m[aá]ximo|quero\s+gastar|gastar\s+at[eé]|posso\s+gastar)\b", t):
+        return True
+
+    # Lembretes
+    if _detectar_lembrete_rapido(t):
+        return True
+
+    return False
+
+
 async def _baixar_audio_evolution(msg_data: dict) -> tuple[bytes | None, str]:
     mime_type = msg_data.get("message", {}).get("audioMessage", {}).get("mimetype", "audio/ogg")
     url = f"{settings.EVOLUTION_API_URL}/chat/getBase64FromMediaMessage/{settings.EVOLUTION_INSTANCE}"
@@ -79,7 +115,22 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
         transcricao = await transcrever_audio(audio_bytes, mime_type)
         print(f"🎤 Transcrição: {transcricao}")
 
-        # Verifica se é entrada de dinheiro
+        # ── Roteamento inteligente: se for comando/parcelado/recorrente/limite/lembrete,
+        # passa pelo text_handler que tem toda a lógica completa ──────────────────────
+        if _precisa_text_handler(transcricao):
+            print(f"🎤➡️📝 Roteando áudio pelo text_handler")
+            # Import aqui pra evitar import circular
+            from src.handlers.text_handler import handle_text_message
+            resposta = await handle_text_message({
+                "text": {"body": transcricao},
+                "key": {"remoteJid": remote_jid}
+            })
+            # Adiciona o áudio transcrito no topo da resposta pra confirmar o que foi entendido
+            if resposta and resposta.get("content"):
+                resposta["content"] = f"🗣️ _\"{transcricao}\"_\n\n{resposta['content']}"
+            return resposta
+
+        # ── Verifica se é entrada de dinheiro ──
         if _detectar_entrada_texto(transcricao):
             dados = await processar_entrada_texto(transcricao)
             entrada_id = await salvar_entrada(numero, dados, fonte="audio")
@@ -95,14 +146,15 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             )
             return {"type": "text", "content": card}
 
-        # Caso contrário, processa como gasto
+        # ── Caso contrário, processa como gasto comum ──
         dados = await processar_gasto_audio(audio_bytes, mime_type)
         dados["transcricao"] = transcricao  # reusa a transcrição já feita
         gasto_id = await salvar_gasto(numero, dados, fonte="audio")
         ultimo_gasto[numero] = gasto_id
         await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
 
-        alerta = await verificar_limite_pos_gasto(numero) or ""
+        # Passa categoria pra checar limite por categoria também
+        alerta = await verificar_limite_pos_gasto(numero, dados.get("categoria")) or ""
 
         card = CARD_AUDIO.format(
             transcricao=transcricao,
