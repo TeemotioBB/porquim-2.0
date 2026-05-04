@@ -38,26 +38,58 @@ EMOJI_CAT = {
 def detectar_recorrente(texto: str) -> bool:
     """Detecta se a mensagem é para criar um gasto recorrente."""
     t = texto.lower().strip()
+    t_norm = _normalizar_numeros_extenso(t)
     padroes = [
-        r"\btodo\s+(dia\s+)?\d{1,2}\b",
-        r"\btodo\s+m[eê]s\s+(no\s+)?dia\s+\d{1,2}",
+        r"\btodo\s+(dia\s+)?\d{1,2}\b",                       # "todo dia 10"
+        r"\btodo\s+m[eê]s\s+(no\s+)?dia\s+\d{1,2}",           # "todo mês no dia 5"
         r"\bmensalmente\b",
-        r"\bdia\s+\d{1,2}\s+todo\s+m[eê]s",
+        r"\bdia\s+\d{1,2}\s+todo\s+m[eê]s",                   # "dia 5 todo mês"
         r"\brecorrente\b",
+        r"\btodos?\s+os\s+meses\b",                            # "todos os meses"
+        r"\bcada\s+m[eê]s\b",                                  # "cada mês"
     ]
-    return any(re.search(p, t) for p in padroes)
+    return any(re.search(p, t_norm) for p in padroes)
 
 
 def detectar_parcelado(texto: str) -> bool:
     """Detecta se a mensagem indica compra parcelada."""
     t = texto.lower().strip()
+    # Normaliza números por extenso comuns
+    t_norm = _normalizar_numeros_extenso(t)
     padroes = [
-        r"\bem\s+\d+\s*x\b",          # "em 6x", "em 12 x"
-        r"\b\d+\s*x\s+de\s+",          # "6x de 200", "12x de 100"
-        r"\bparcelad[oa]\s+em\s+\d+",  # "parcelado em 6"
-        r"\b\d+\s+parcelas\b",         # "12 parcelas"
+        r"\bem\s+\d+\s*x\b",                     # "em 6x", "em 12 x"
+        r"\b\d+\s*x\s+de\s+",                     # "6x de 200"
+        r"\bparcelad[oa]s?\s+em\s+\d+",           # "parcelado em 6"
+        r"\bparcelei\s+(em\s+|de\s+)?\d+",        # "parcelei em 6", "parcelei de 8"
+        r"\b\d+\s+parcelas\b",                    # "12 parcelas"
+        r"\b\d+\s+(vezes|veses)\s+de\s+",         # "8 vezes de 175"
+        r"\bem\s+\d+\s+(vezes|veses)\b",          # "em 8 vezes"
+        r"\bde\s+\d+\s+(vezes|veses)\b",          # "de 8 vezes"
     ]
-    return any(re.search(p, t) for p in padroes)
+    return any(re.search(p, t_norm) for p in padroes)
+
+
+# ─── Normalização de números por extenso ──────────────────────────────────────
+
+_NUMEROS_EXTENSO = {
+    "duas": "2", "dois": "2", "três": "3", "tres": "3",
+    "quatro": "4", "cinco": "5", "seis": "6", "sete": "7",
+    "oito": "8", "nove": "9", "dez": "10", "onze": "11",
+    "doze": "12", "treze": "13", "quatorze": "14", "catorze": "14",
+    "quinze": "15", "dezesseis": "16", "dezessete": "17",
+    "dezoito": "18", "dezenove": "19", "vinte": "20",
+    "vinte e quatro": "24", "vinte e quatro": "24",
+    "trinta": "30", "trinta e seis": "36", "quarenta e oito": "48",
+    "sessenta": "60",
+}
+
+def _normalizar_numeros_extenso(texto: str) -> str:
+    """Substitui números por extenso pelos seus dígitos (apenas no contexto de parcelas)."""
+    t = texto
+    # Ordena por tamanho decrescente pra "vinte e quatro" vir antes de "vinte"
+    for palavra, num in sorted(_NUMEROS_EXTENSO.items(), key=lambda x: -len(x[0])):
+        t = re.sub(rf"\b{palavra}\b", num, t, flags=re.IGNORECASE)
+    return t
 
 
 # ─── Parsers ──────────────────────────────────────────────────────────────────
@@ -115,7 +147,7 @@ Mensagem: {texto}"""
 async def parsear_parcelado(texto: str, grok_client) -> dict | None:
     """Extrai: descricao, valor_total, num_parcelas, categoria, forma_pagamento."""
     import json
-    prompt = f"""Você extrai informações de COMPRAS PARCELADAS em português.
+    prompt = f"""Você extrai informações de COMPRAS PARCELADAS em português brasileiro.
 
 Responda APENAS com JSON válido, sem markdown:
 {{
@@ -126,17 +158,25 @@ Responda APENAS com JSON válido, sem markdown:
   "forma_pagamento": "Cartão"
 }}
 
-Regras:
+ATENÇÃO — interpretação dos valores:
 - "valor_total" é o valor TOTAL da compra (não o da parcela)
-- Se a mensagem disser "6x de 200", calcule 6*200 = 1200
-- Se disser "1200 em 6x", o total é 1200
+- "TV de 6x de 200" = 6 parcelas × R$200 = TOTAL R$1200
+- "TV 1200 em 6x" = total já é R$1200
+- "TV de 8 vezes de 175" = 8 × R$175 = TOTAL R$1400
+- "TV de oito vezes de 1400" = AMBÍGUO. Por padrão, interprete o número MAIOR como TOTAL e divida pelas parcelas (8 parcelas, total R$1400, parcela R$175)
+- "parcelei a TV de 8 vezes 1400" = mesmo caso acima: 8 parcelas, total R$1400
 - num_parcelas mínimo: 2
+
+Aceite números por extenso: oito=8, doze=12, vinte e quatro=24, etc.
 
 Exemplos:
 "comprei TV 1200 em 6x cartão" → {{"descricao": "TV", "valor_total": 1200, "num_parcelas": 6, "categoria": "Lazer", "forma_pagamento": "Cartão"}}
 "sapato 300 parcelado em 3x" → {{"descricao": "Sapato", "valor_total": 300, "num_parcelas": 3, "categoria": "Vestuário", "forma_pagamento": "Cartão"}}
 "geladeira 12x de 250 cartão" → {{"descricao": "Geladeira", "valor_total": 3000, "num_parcelas": 12, "categoria": "Moradia", "forma_pagamento": "Cartão"}}
 "mouse 90 em 2x" → {{"descricao": "Mouse", "valor_total": 90, "num_parcelas": 2, "categoria": "Outros", "forma_pagamento": "Cartão"}}
+"parcelei a TV em 8 vezes de 1400" → {{"descricao": "TV", "valor_total": 1400, "num_parcelas": 8, "categoria": "Lazer", "forma_pagamento": "Cartão"}}
+"comprei um sofá e parcelei em 10 vezes 250" → {{"descricao": "Sofá", "valor_total": 2500, "num_parcelas": 10, "categoria": "Moradia", "forma_pagamento": "Cartão"}}
+"fiz uma compra parcelada da geladeira de 12 vezes de 200" → {{"descricao": "Geladeira", "valor_total": 2400, "num_parcelas": 12, "categoria": "Moradia", "forma_pagamento": "Cartão"}}
 
 Mensagem: {texto}"""
     try:
