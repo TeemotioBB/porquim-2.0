@@ -70,6 +70,7 @@ async def _create_tables():
                 ultimo_gasto_id   INTEGER,
                 ultima_entrada_id INTEGER,
                 lote_gastos_ids   TEXT,  -- IDs separados por vírgula
+                intencao_pendente TEXT,  -- ação aguardando confirmação ex: "limite:500"
                 atualizado_em  TIMESTAMP DEFAULT NOW()
             );
         """)
@@ -238,31 +239,33 @@ async def deletar_entrada(entrada_id: int, usuario: str) -> bool:
 
 # ── Memória persistente ──────────────────────────────────────────────────────
 
-async def salvar_memoria(usuario: str, ultimo_gasto_id: int = None, ultima_entrada_id: int = None, lote_ids: list = None):
+async def salvar_memoria(usuario: str, ultimo_gasto_id: int = None, ultima_entrada_id: int = None, lote_ids: list = None, intencao_pendente: str = None):
     pool = await get_pool()
     async with pool.acquire() as conn:
         lote_str = ",".join(str(i) for i in lote_ids) if lote_ids else None
         await conn.execute("""
-            INSERT INTO memoria_usuario (usuario, ultimo_gasto_id, ultima_entrada_id, lote_gastos_ids, atualizado_em)
-            VALUES ($1, $2, $3, $4, NOW())
+            INSERT INTO memoria_usuario (usuario, ultimo_gasto_id, ultima_entrada_id, lote_gastos_ids, intencao_pendente, atualizado_em)
+            VALUES ($1, $2, $3, $4, $5, NOW())
             ON CONFLICT (usuario) DO UPDATE SET
                 ultimo_gasto_id   = COALESCE($2, memoria_usuario.ultimo_gasto_id),
                 ultima_entrada_id = COALESCE($3, memoria_usuario.ultima_entrada_id),
                 lote_gastos_ids   = COALESCE($4, memoria_usuario.lote_gastos_ids),
+                intencao_pendente = COALESCE($5, memoria_usuario.intencao_pendente),
                 atualizado_em     = NOW()
-        """, usuario, ultimo_gasto_id, ultima_entrada_id, lote_str)
+        """, usuario, ultimo_gasto_id, ultima_entrada_id, lote_str, intencao_pendente)
 
 async def buscar_memoria(usuario: str) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM memoria_usuario WHERE usuario=$1", usuario)
         if not row:
-            return {"ultimo_gasto_id": None, "ultima_entrada_id": None, "lote_gastos_ids": []}
+            return {"ultimo_gasto_id": None, "ultima_entrada_id": None, "lote_gastos_ids": [], "intencao_pendente": None}
         lote = [int(i) for i in row["lote_gastos_ids"].split(",") if i] if row["lote_gastos_ids"] else []
         return {
             "ultimo_gasto_id": row["ultimo_gasto_id"],
             "ultima_entrada_id": row["ultima_entrada_id"],
-            "lote_gastos_ids": lote
+            "lote_gastos_ids": lote,
+            "intencao_pendente": row["intencao_pendente"]
         }
 
 async def limpar_memoria_gasto(usuario: str):
@@ -277,4 +280,24 @@ async def limpar_memoria_entrada(usuario: str):
     async with pool.acquire() as conn:
         await conn.execute("""
             UPDATE memoria_usuario SET ultima_entrada_id=NULL WHERE usuario=$1
+        """, usuario)
+
+async def salvar_intencao_pendente(usuario: str, intencao: str):
+    """Salva uma intenção pendente aguardando confirmação do usuário."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO memoria_usuario (usuario, intencao_pendente, atualizado_em)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (usuario) DO UPDATE SET
+                intencao_pendente = $2,
+                atualizado_em = NOW()
+        """, usuario, intencao)
+
+async def limpar_intencao_pendente(usuario: str):
+    """Remove a intenção pendente após execução ou cancelamento."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            UPDATE memoria_usuario SET intencao_pendente=NULL WHERE usuario=$1
         """, usuario)
