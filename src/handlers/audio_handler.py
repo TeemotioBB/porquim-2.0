@@ -98,31 +98,68 @@ def _precisa_text_handler(transcricao: str) -> bool:
     Decide se a transcrição deve ser roteada pelo text_handler ao invés
     do fluxo direto de gasto. True quando contém comandos, parcelado,
     recorrente, limite por categoria, resumos, lembretes, listagens, etc.
+
+    IMPORTANTE: esta função precisa cobrir TODOS os comandos textuais
+    suportados pelo text_handler, pra que qualquer um deles possa ser
+    acionado também por áudio.
     """
     t = transcricao.lower().strip()
+    # Tira pontuação no fim (Whisper costuma adicionar "." em frase única)
+    t = re.sub(r"[.!?,;]+$", "", t).strip()
 
-    # Comandos diretos (palavra única ou prefixo)
+    # ── Comandos diretos: palavra única ou prefixo ────────────────────────────
     comandos_simples = (
-        "ajuda", "menu", "ola", "olá", "oi",
-        "resumo", "limite", "limites",
+        # Ajuda / saudações
+        "ajuda", "menu", "ola", "olá", "oi", "start", "help",
+        "inicio", "início",
+        # Resumos / relatórios (tudo que começa com resumo já vem por aqui)
+        "resumo", "relatorio", "relatório", "gastos", "ver gastos",
+        # Limites
+        "limite", "limites",
+        "meus limites", "ver limites", "listar limites",
+        # Recorrentes / parcelas
         "recorrentes", "parcelas",
+        "meus recorrentes", "ver recorrentes", "listar recorrentes",
+        "minhas parcelas", "ver parcelas", "listar parcelas",
+        # Operações em itens registrados
         "remover", "editar",
         "cancelar",
-        "suporte", "atendente", "atendimento", "contato"
+        # Suporte
+        "suporte", "atendente", "atendimento", "contato",
+        # Lembretes (listagem)
+        "meus lembretes", "ver lembretes", "listar lembretes",
+        # Reset
+        "resetar", "reset", "apagar tudo", "zerar tudo", "limpar tudo",
     )
-    if any(t.startswith(c) for c in comandos_simples):
+    if any(t == c or t.startswith(c + " ") for c in comandos_simples):
         return True
 
-    # Parcelado / recorrente
+    # ── Confirmações / cancelamentos (curtinhos) ─────────────────────────────
+    # Quando o usuário responde a uma intenção pendente. Lista vinda do
+    # text_handler. Mantém em sincronia com _confirmacoes / _cancelamentos lá.
+    confirmacoes_cancelamentos = (
+        "sim", "pode", "confirma", "isso", "quero", "vai", "ok",
+        "bora", "yes", "s", "já paguei", "ja paguei", "paguei",
+        "não", "nao", "cancela", "esquece", "deixa", "no",
+        "ainda não", "ainda nao", "depois",
+    )
+    if t in confirmacoes_cancelamentos:
+        return True
+
+    # ── Parcelado / recorrente ────────────────────────────────────────────────
     if detectar_parcelado(t) or detectar_recorrente(t):
         return True
 
-    # Limite (contém "limite", "teto", "máximo", "quero gastar")
+    # ── Limite (contém "limite", "teto", "máximo", "quero gastar") ────────────
     if re.search(r"\b(limite|teto|m[aá]ximo|quero\s+gastar|gastar\s+at[eé]|posso\s+gastar)\b", t):
         return True
 
-    # Lembretes
+    # ── Lembretes (criação) ───────────────────────────────────────────────────
     if _detectar_lembrete_rapido(t):
+        return True
+
+    # ── Frases de suporte sem prefixo direto ──────────────────────────────────
+    if re.search(r"\b(preciso\s+de\s+ajuda|falar\s+com\s+humano|fale\s+conosco|fala\s+conosco)\b", t):
         return True
 
     return False
@@ -183,8 +220,13 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             print(f"🎤➡️📝 Roteando áudio pelo text_handler")
             # Import aqui pra evitar import circular
             from src.handlers.text_handler import handle_text_message
+            # Normaliza a transcrição: o Whisper costuma colocar "." no fim de
+            # frases curtas (ex: "Resumo." / "Suporte."), o que faz o
+            # text_handler não reconhecer comandos que dependem de igualdade
+            # exata (texto_lower in [...]). Tira pontuação final.
+            texto_normalizado = re.sub(r"[.!?,;]+$", "", transcricao).strip()
             resposta = await handle_text_message({
-                "text": {"body": transcricao},
+                "text": {"body": texto_normalizado},
                 "key": {"remoteJid": remote_jid}
             })
             # Adiciona o áudio transcrito no topo da resposta pra confirmar o que foi entendido
