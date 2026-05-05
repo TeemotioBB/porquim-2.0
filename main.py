@@ -619,7 +619,7 @@ async def criar_preferencia(body: PreferenciaBody):
     if not MP_ACCESS_TOKEN:
         raise HTTPException(status_code=500, detail="MP_ACCESS_TOKEN não configurado")
 
-    precos = {"mensal": 19.90, "anual": 67.00}
+    precos = {"mensal": 9.90, "anual": 67.00}
     plano = body.plano if body.plano in precos else "mensal"
     valor = precos[plano]
 
@@ -1079,7 +1079,7 @@ async def evolution_webhook(request: Request, any: str = None):
                 await _enviar_resposta(remote_jid,
                     "👋 Olá! O *Johnny* é um assistente financeiro via WhatsApp.\n\n"
                     "Para usar, você precisa de uma assinatura:\n"
-                    "• 💰 Mensal: R$ 19,90\n"
+                    "• 💰 Mensal: R$ 9,90\n"
                     "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
                     "Acesse nossa página para assinar:\n"
                     "👉 meujohnny.com.br\n\n"
@@ -1089,7 +1089,7 @@ async def evolution_webhook(request: Request, any: str = None):
                 await _enviar_resposta(remote_jid,
                     f"⚠️ Sua assinatura expirou.\n\n"
                     f"Renove agora para continuar usando o Johnny 🐹:\n"
-                    f"• 💰 Mensal: R$ 19,90\n"
+                    f"• 💰 Mensal: R$ 9,90\n"
                     f"• 🎉 Anual: R$ 67,00\n\n"
                     f"👉 https://www.meujohnny.com.br/"
                 )
