@@ -65,6 +65,8 @@ _"Limite roupas 200"_ (por categoria)
 📊 *Resumos:*
 *resumo* · *resumo hoje* · *resumo ontem*
 *resumo de janeiro* · *resumo mês passado*
+*resumo dia 15* · *resumo dia 15 de abril*
+*resumo do dia 1 ao dia 15* · *resumo 01/05 a 15/05*
 
 🔔 *Lembretes:*
 _"Reunião amanhã 14h"_
@@ -74,6 +76,8 @@ _"Reunião amanhã 14h"_
 
 📲 *Dashboard completo:*
 👉 https://dashboard-porquim-theta.vercel.app
+
+🆘 *Precisa de ajuda humana?* Digite *suporte*
 
 Um hábito simples que muda tudo 💚"""
 
@@ -213,39 +217,63 @@ async def _detectar_entrada(texto: str) -> bool:
 def _parse_mes_resumo(texto: str):
     hoje = date.today()
     resto = re.sub(r"^resumo\s*", "", texto.lower().strip()).strip()
+    # Remove "do/de/da" iniciais
     resto = re.sub(r"^(do|de|da)\s+", "", resto).strip()
 
-    if not resto:
-        return hoje.year, hoje.month
+    # IMPORTANTE: detectar "mês passado" / "mês que vem" ANTES de remover o
+    # prefixo "mês de ...", senão "mês passado" vira "passado" e quebra.
     if re.search(r"m[eê]s\s+passado", resto):
         primeiro = hoje.replace(day=1)
         anterior = primeiro - timedelta(days=1)
         return anterior.year, anterior.month
+    if re.search(r"m[eê]s\s+(que\s+vem|seguinte|pr[óo]ximo)", resto):
+        if hoje.month == 12:
+            return hoje.year + 1, 1
+        return hoje.year, hoje.month + 1
+
+    # Agora sim: remove a palavra "mês"/"mes" sozinha (ex: "do mês de janeiro" -> "janeiro")
+    resto = re.sub(r"^m[eê]s\s+(?:de\s+|do\s+|da\s+)?", "", resto).strip()
+
+    if not resto:
+        return hoje.year, hoje.month
     if "ano passado" in resto:
         return hoje.year - 1, hoje.month
     for nome, num in MESES_NOMES.items():
-        if nome in resto:
+        if re.search(rf"\b{nome}\b", resto):
             ano_match = re.search(r"\b(20\d{2})\b", resto)
             ano = int(ano_match.group(1)) if ano_match else hoje.year
             return ano, num
+    # "resumo 5" ou "resumo 05" -> mês 5 do ano atual
     num_match = re.match(r"^(\d{1,2})$", resto)
     if num_match:
         mes = int(num_match.group(1))
         if 1 <= mes <= 12:
             return hoje.year, mes
+    # "resumo 5/2024" ou "resumo 05/2024"
+    num_match = re.match(r"^(\d{1,2})[/\-](\d{4})$", resto)
+    if num_match:
+        mes = int(num_match.group(1))
+        ano = int(num_match.group(2))
+        if 1 <= mes <= 12:
+            return ano, mes
     return hoje.year, hoje.month
 
 
 def _parse_resumo_intervalo(texto: str) -> tuple[date, date, str] | None:
     """
     Detecta resumos de intervalo: 'resumo hoje', 'resumo ontem', 'resumo semana',
-    'resumo dia 15', 'resumo de 01/05 a 15/05'.
+    'resumo dia 15', 'resumo de 01/05 a 15/05', 'resumo do dia 15 ao dia 30',
+    'resumo do dia 1 ao dia 15 de abril', 'resumo de 15/04 a 30/04', etc.
     Retorna (data_inicio, data_fim, titulo) ou None se não bater.
     """
     t = texto.lower().strip()
     t = re.sub(r"^resumo\s*", "", t).strip()
+    # Remove "do/de/da" iniciais (e também "de" duplicado tipo "do dia 1 de maio")
     t = re.sub(r"^(do|de|da)\s+", "", t).strip()
     hoje = date.today()
+
+    if not t:
+        return None
 
     if t == "hoje":
         return hoje, hoje, "Hoje"
@@ -261,7 +289,97 @@ def _parse_resumo_intervalo(texto: str) -> tuple[date, date, str] | None:
         ini_passada = fim_passada - timedelta(days=6)
         return ini_passada, fim_passada, "Semana passada"
 
-    # "resumo dia 15" ou "resumo dia 15/05"
+    # Helper: nome do mês -> número
+    def _mes_num(nome: str) -> int | None:
+        return MESES_NOMES.get(nome.lower())
+
+    # ── INTERVALO COM "DIA X AO/A DIA Y [DE MES] [ANO]" ──────────────────────
+    # Aceita: "dia 15 ao dia 30", "dia 1 a dia 15 de abril",
+    #         "dia 5 ao dia 20 de janeiro de 2025"
+    m = re.match(
+        r"^dia\s+(\d{1,2})\s+(?:a|ao|at[eé])\s+(?:dia\s+)?(\d{1,2})"
+        r"(?:\s+(?:de|do)\s+([a-zçãéíóúâêô]+))?"
+        r"(?:\s+(?:de|do)\s+(\d{2,4}))?$",
+        t
+    )
+    if m:
+        try:
+            d1 = int(m.group(1))
+            d2 = int(m.group(2))
+            mes_nome = m.group(3)
+            ano_str = m.group(4)
+            if mes_nome:
+                mes_num = _mes_num(mes_nome)
+                if not mes_num:
+                    return None
+            else:
+                mes_num = hoje.month
+            ano = int(ano_str) if ano_str else hoje.year
+            if ano < 100:
+                ano += 2000
+            ini = date(ano, mes_num, d1)
+            fim = date(ano, mes_num, d2)
+            if ini > fim:
+                ini, fim = fim, ini
+            return ini, fim, f"{ini.strftime('%d/%m')} a {fim.strftime('%d/%m/%Y')}"
+        except ValueError:
+            return None
+
+    # ── INTERVALO SIMPLES "X AO Y [DE MES]" (sem palavra "dia") ──────────────
+    # Aceita: "15 ao 30", "1 a 15 de abril", "5 a 20 de maio de 2025"
+    m = re.match(
+        r"^(\d{1,2})\s+(?:a|ao|at[eé])\s+(\d{1,2})"
+        r"(?:\s+(?:de|do)\s+([a-zçãéíóúâêô]+))?"
+        r"(?:\s+(?:de|do)\s+(\d{2,4}))?$",
+        t
+    )
+    if m:
+        try:
+            d1 = int(m.group(1))
+            d2 = int(m.group(2))
+            mes_nome = m.group(3)
+            ano_str = m.group(4)
+            if mes_nome:
+                mes_num = _mes_num(mes_nome)
+                if not mes_num:
+                    return None
+            else:
+                # Sem nome de mês: assume mês atual; mas só se ambos dias <= 31
+                mes_num = hoje.month
+            ano = int(ano_str) if ano_str else hoje.year
+            if ano < 100:
+                ano += 2000
+            if not (1 <= d1 <= 31 and 1 <= d2 <= 31):
+                return None
+            ini = date(ano, mes_num, d1)
+            fim = date(ano, mes_num, d2)
+            if ini > fim:
+                ini, fim = fim, ini
+            return ini, fim, f"{ini.strftime('%d/%m')} a {fim.strftime('%d/%m/%Y')}"
+        except ValueError:
+            return None
+
+    # ── "dia 15 de abril" / "dia 15 de janeiro de 2025" / "dia 15/05" ────────
+    m = re.match(
+        r"^dia\s+(\d{1,2})\s+(?:de|do)\s+([a-zçãéíóúâêô]+)"
+        r"(?:\s+(?:de|do)\s+(\d{2,4}))?$",
+        t
+    )
+    if m:
+        try:
+            dia = int(m.group(1))
+            mes_num = _mes_num(m.group(2))
+            if not mes_num:
+                return None
+            ano = int(m.group(3)) if m.group(3) else hoje.year
+            if ano < 100:
+                ano += 2000
+            d = date(ano, mes_num, dia)
+            return d, d, d.strftime("%d/%m/%Y")
+        except ValueError:
+            return None
+
+    # "resumo dia 15" ou "resumo dia 15/05" ou "resumo dia 15/05/2025"
     m = re.match(r"^dia\s+(\d{1,2})(?:[/-](\d{1,2}))?(?:[/-](\d{2,4}))?$", t)
     if m:
         dia = int(m.group(1))
@@ -277,7 +395,7 @@ def _parse_resumo_intervalo(texto: str) -> tuple[date, date, str] | None:
 
     # "resumo 01/05 a 15/05" ou "resumo de 01/05 até 15/05"
     m = re.match(
-        r"^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\s+(?:a|até|ate)\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$",
+        r"^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\s+(?:a|ao|até|ate)\s+(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$",
         t
     )
     if m:
@@ -294,6 +412,20 @@ def _parse_resumo_intervalo(texto: str) -> tuple[date, date, str] | None:
         except ValueError:
             return None
 
+    # "resumo 15/05" (data única DD/MM[/YYYY])
+    m = re.match(r"^(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$", t)
+    if m:
+        try:
+            dia = int(m.group(1))
+            mes = int(m.group(2))
+            ano = int(m.group(3)) if m.group(3) else hoje.year
+            if ano < 100:
+                ano += 2000
+            d = date(ano, mes, dia)
+            return d, d, d.strftime("%d/%m/%Y")
+        except ValueError:
+            return None
+
     return None
 
 
@@ -307,6 +439,31 @@ async def handle_text_message(message: dict) -> dict:
     # ── Ajuda ─────────────────────────────────────────────────────────────────
     if texto_lower in ["oi", "olá", "ola", "start", "ajuda", "help", "menu", "inicio", "início"]:
         return {"type": "text", "content": AJUDA}
+
+    # ── Suporte ───────────────────────────────────────────────────────────────
+    # Aceita variações comuns: "suporte", "ajuda suporte", "preciso de ajuda",
+    # "falar com humano", "atendente", "contato", "fale conosco".
+    _gatilhos_suporte = (
+        "suporte", "ajuda humana", "ajuda do suporte",
+        "preciso de ajuda", "falar com humano", "falar com humanos",
+        "falar com atendente", "atendente", "atendimento",
+        "contato", "fale conosco", "fala conosco"
+    )
+    if texto_lower in _gatilhos_suporte or any(
+        texto_lower == g or texto_lower.startswith(g + " ") for g in _gatilhos_suporte
+    ):
+        numero_suporte = settings.SUPPORT_WHATSAPP.lstrip("+")
+        link_suporte = f"https://wa.me/{numero_suporte}?text=Ol%C3%A1%21+Preciso+de+ajuda+com+o+Johnny+%F0%9F%90%B9"
+        return {
+            "type": "text",
+            "content": (
+                "🆘 *Suporte Johnny 🐹*\n\n"
+                "Tô aqui pra te ajudar com o que precisar! 💚\n\n"
+                "Se você precisa falar com um humano, é só chamar no WhatsApp:\n"
+                f"👉 {link_suporte}\n\n"
+                "_Atendimento de seg. a sex., 9h às 18h._"
+            )
+        }
 
     # ── Confirmação de intenção pendente ──────────────────────────────────────
     _confirmacoes = ["sim", "pode", "confirma", "isso", "quero", "vai", "ok", "bora", "yes", "s", "já paguei", "ja paguei", "paguei"]
