@@ -156,11 +156,26 @@ async function carregar() {
       document.getElementById('login-err').textContent = '❌ Senha incorreta';
       sair(); return;
     }
+    if (!r.ok) {
+      // Mostra o erro real do servidor em vez de "verifique sua conexão"
+      let detalhe = '';
+      try {
+        const corpo = await r.text();
+        detalhe = corpo.slice(0, 500);
+      } catch (_) {}
+      document.getElementById('lista').innerHTML =
+        `<div class="empty">⚠️ Erro ${r.status} do servidor.<br><br>` +
+        `<small style="opacity:.7;word-break:break-word">${detalhe || '(sem detalhes)'}</small></div>`;
+      return;
+    }
     dados = await r.json();
     renderStats();
     renderLista();
   } catch(e) {
-    document.getElementById('lista').innerHTML = '<div class="empty">Erro ao carregar. Verifique sua conexão.</div>';
+    // Erro de rede de verdade (offline, CORS, DNS, etc.)
+    document.getElementById('lista').innerHTML =
+      `<div class="empty">❌ Erro de conexão.<br><br>` +
+      `<small style="opacity:.7">${(e && e.message) || e}</small></div>`;
   }
 }
 
