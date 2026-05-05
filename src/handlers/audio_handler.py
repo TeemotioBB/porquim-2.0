@@ -46,6 +46,144 @@ def _detectar_entrada_texto(texto: str) -> bool:
     ))
 
 
+def _normalizar_comando_audio(transcricao: str) -> str:
+    """
+    Normaliza uma transcrição de áudio para parecer com um comando textual.
+
+    Pessoas falam por áudio em linguagem natural ("Me dê o resumo do dia 15",
+    "Pode mostrar meus limites?"), enquanto o text_handler espera comandos
+    mais diretos ("resumo dia 15", "meus limites"). Esta função:
+      1. Coloca em minúsculo e tira espaços/pontuação extras.
+      2. Remove iterativamente prefixos conversacionais comuns
+         ("pode", "me dê", "quero ver", "mostrar", "o", "a", etc.).
+    A ideia é só remover ruído conversacional, sem inferir intenção.
+    """
+    if not transcricao:
+        return ""
+    t = transcricao.lower().strip()
+    # Tira pontuação no fim/início (Whisper sempre coloca "." em frases curtas)
+    t = re.sub(r"[.!?,;]+$", "", t).strip()
+    t = re.sub(r"^[.!?,;]+", "", t).strip()
+
+    # Lista de prefixos conversacionais a remover.
+    # São ordenados automaticamente do maior pro menor antes de aplicar,
+    # garantindo que "mostra meus" seja preferido a "mostra " quando ambos
+    # encaixam.
+    prefixos = [
+        # Polidez longa
+        "será que você poderia ", "sera que voce poderia ",
+        "será que você pode ", "sera que voce pode ",
+        "será que dá pra ", "sera que da pra ",
+        "será que dá para ", "sera que da para ",
+        "por gentileza ", "por gentileza, ",
+        "por favor, ", "por favor ",
+        # Verbos de pedido (você/tu pode...)
+        "você poderia me ", "voce poderia me ",
+        "você pode me ", "voce pode me ",
+        "tu pode me ", "tu poderia me ",
+        "você poderia ", "voce poderia ",
+        "você pode ", "voce pode ",
+        "tu pode ", "tu poderia ",
+        "pode me ", "podia me ", "poderia me ",
+        "pode ", "podia ", "poderia ",
+        # Verbos de pedido pessoais ("eu quero", "queria")
+        "eu queria ", "eu gostaria de ", "gostaria de ",
+        "eu preciso ", "preciso ",
+        # IMPORTANTE: NÃO removemos "quero " sozinho porque "quero gastar 500
+        # com roupa" é a forma de definir limite por categoria — o
+        # text_handler precisa do "quero gastar" intacto. Em vez disso,
+        # listamos combinações específicas de "quero" + verbo de pedido.
+        "eu quero ver os ", "quero ver os ",
+        "eu quero ver as ", "quero ver as ",
+        "eu quero ver o ", "quero ver o ",
+        "eu quero ver a ", "quero ver a ",
+        "eu quero ver meus ", "quero ver meus ",
+        "eu quero ver minhas ", "quero ver minhas ",
+        "eu quero ver meu ", "quero ver meu ",
+        "eu quero ver minha ", "quero ver minha ",
+        "eu quero ver ", "quero ver ",
+        "eu quero saber ", "quero saber ",
+        "eu quero o ", "quero o ",
+        "eu quero a ", "quero a ",
+        "eu quero os ", "quero os ",
+        "eu quero as ", "quero as ",
+        "eu quero meus ", "quero meus ",
+        "eu quero minhas ", "quero minhas ",
+        "eu quero meu ", "quero meu ",
+        "eu quero minha ", "quero minha ",
+        "eu quero um ", "quero um ",
+        "eu quero uma ", "quero uma ",
+        "vou querer ver os ", "vou querer ver as ", "vou querer ver o ", "vou querer ver a ",
+        "vou querer os ", "vou querer as ", "vou querer o ", "vou querer a ",
+        "vou querer meus ", "vou querer minhas ", "vou querer meu ", "vou querer minha ",
+        "vou querer um ", "vou querer uma ",
+        "vou querer ver ", "vou querer ",
+        "queria ver ", "queria ",
+        # Verbos imperativos: dar/mostrar/etc + artigo
+        "me dê o ", "me de o ", "me da o ", "me dá o ",
+        "me dê a ", "me de a ", "me da a ", "me dá a ",
+        "me dê os ", "me de os ", "me da os ", "me dá os ",
+        "me dê as ", "me de as ", "me da as ", "me dá as ",
+        "me dê um ", "me de um ", "me da um ", "me dá um ",
+        "me dê uma ", "me de uma ", "me da uma ", "me dá uma ",
+        "me dê meus ", "me de meus ", "me da meus ", "me dá meus ",
+        "me dê minhas ", "me de minhas ", "me da minhas ", "me dá minhas ",
+        "me dê meu ", "me de meu ", "me da meu ", "me dá meu ",
+        "me dê minha ", "me de minha ", "me da minha ", "me dá minha ",
+        "me dê ", "me de ", "me da ", "me dá ",
+        "dar o ", "dar a ", "dar os ", "dar as ",
+        "dar meus ", "dar minhas ", "dar meu ", "dar minha ",
+        "dar um ", "dar uma ", "dar ",
+        "me mostre os ", "me mostra os ", "me mostre as ", "me mostra as ",
+        "me mostre o ", "me mostra o ", "me mostre a ", "me mostra a ",
+        "me mostre meus ", "me mostra meus ", "me mostre minhas ", "me mostra minhas ",
+        "me mostre meu ", "me mostra meu ", "me mostre minha ", "me mostra minha ",
+        "me mostre ", "me mostra ",
+        "mostrar os ", "mostrar as ", "mostrar o ", "mostrar a ",
+        "mostrar meus ", "mostrar minhas ", "mostrar meu ", "mostrar minha ",
+        "mostrar um ", "mostrar uma ", "mostrar ",
+        "mostre os ", "mostra os ", "mostre as ", "mostra as ",
+        "mostre o ", "mostra o ", "mostre a ", "mostra a ",
+        "mostre meus ", "mostra meus ", "mostre minhas ", "mostra minhas ",
+        "mostre meu ", "mostra meu ", "mostre minha ", "mostra minha ",
+        "mostre ", "mostra ",
+        "me passa o ", "me passa a ", "me passa ",
+        "me traz o ", "me traz a ", "me traz ",
+        "me manda o ", "me manda a ", "me manda ",
+        "me envia o ", "me envia a ", "me envia ",
+        "ver os ", "ver as ", "ver o ", "ver a ",
+        "ver meus ", "ver minhas ", "ver meu ", "ver minha ",
+        "ver um ", "ver uma ", "ver ",
+        # Saudação encadeada ("oi, me dá o resumo")
+        "oi, ", "olá, ", "ola, ",
+        "oi ", "olá ", "ola ", "ei ", "opa ", "hey ",
+        "aí, ", "ai, ", "aí ", "ai ", "então, ", "entao, ", "então ", "entao ",
+    ]
+    # ORDENAÇÃO CRÍTICA: maior primeiro, pra que "mostra meus " seja preferido a "mostra "
+    prefixos = sorted(set(prefixos), key=len, reverse=True)
+
+    # Aplica em ciclo até estabilizar (cobre encadeamentos como "oi, pode me dar o")
+    for _ in range(12):
+        novo = t
+        for p in prefixos:
+            if novo.startswith(p):
+                novo = novo[len(p):].strip()
+                break
+        if novo == t:
+            break
+        t = novo
+
+    # Sufixos de cortesia
+    t = re.sub(r"[.!?,;]+$", "", t).strip()
+    t = re.sub(r"\s+por\s+favor$", "", t).strip()
+    t = re.sub(r"\s+pra\s+mim$", "", t).strip()
+    t = re.sub(r"\s+para\s+mim$", "", t).strip()
+    t = re.sub(r"\s+aí$", "", t).strip()
+    t = re.sub(r"\s+ai$", "", t).strip()
+
+    return t
+
+
 def _audio_sem_conteudo_util(transcricao: str) -> bool:
     """
     Retorna True se a transcrição estiver vazia, muito curta, sem letras,
@@ -101,18 +239,20 @@ def _precisa_text_handler(transcricao: str) -> bool:
 
     IMPORTANTE: esta função precisa cobrir TODOS os comandos textuais
     suportados pelo text_handler, pra que qualquer um deles possa ser
-    acionado também por áudio.
+    acionado também por áudio — INCLUINDO frases naturais como
+    "Me dê o resumo do dia 15" ou "Pode mostrar meus limites?".
     """
-    t = transcricao.lower().strip()
-    # Tira pontuação no fim (Whisper costuma adicionar "." em frase única)
-    t = re.sub(r"[.!?,;]+$", "", t).strip()
+    # Trabalha sobre a transcrição já normalizada (sem prefixos polidos)
+    t = _normalizar_comando_audio(transcricao)
+    if not t:
+        return False
 
     # ── Comandos diretos: palavra única ou prefixo ────────────────────────────
     comandos_simples = (
         # Ajuda / saudações
         "ajuda", "menu", "ola", "olá", "oi", "start", "help",
         "inicio", "início",
-        # Resumos / relatórios (tudo que começa com resumo já vem por aqui)
+        # Resumos / relatórios
         "resumo", "relatorio", "relatório", "gastos", "ver gastos",
         # Limites
         "limite", "limites",
@@ -127,18 +267,19 @@ def _precisa_text_handler(transcricao: str) -> bool:
         # Suporte
         "suporte", "atendente", "atendimento", "contato",
         # Lembretes (listagem)
-        "meus lembretes", "ver lembretes", "listar lembretes",
-        # Reset
-        "resetar", "reset", "apagar tudo", "zerar tudo", "limpar tudo",
+        "lembretes", "meus lembretes", "ver lembretes", "listar lembretes",
+        # Reset (todas as variantes)
+        "resetar", "reset",
+        "apagar tudo", "quero apagar tudo", "pode apagar tudo",
+        "zerar tudo", "quero zerar tudo",
+        "limpar tudo", "quero limpar tudo",
     )
     if any(t == c or t.startswith(c + " ") for c in comandos_simples):
         return True
 
     # ── Confirmações / cancelamentos (curtinhos) ─────────────────────────────
-    # Quando o usuário responde a uma intenção pendente. Lista vinda do
-    # text_handler. Mantém em sincronia com _confirmacoes / _cancelamentos lá.
     confirmacoes_cancelamentos = (
-        "sim", "pode", "confirma", "isso", "quero", "vai", "ok",
+        "sim", "pode", "confirma", "confirmar", "isso", "quero", "vai", "ok",
         "bora", "yes", "s", "já paguei", "ja paguei", "paguei",
         "não", "nao", "cancela", "esquece", "deixa", "no",
         "ainda não", "ainda nao", "depois",
@@ -158,8 +299,17 @@ def _precisa_text_handler(transcricao: str) -> bool:
     if _detectar_lembrete_rapido(t):
         return True
 
-    # ── Frases de suporte sem prefixo direto ──────────────────────────────────
-    if re.search(r"\b(preciso\s+de\s+ajuda|falar\s+com\s+humano|fale\s+conosco|fala\s+conosco)\b", t):
+    # ── Frases que indicam comando mesmo sem prefixo direto ──────────────────
+    # Suporte / pedido de ajuda humana
+    if re.search(
+        r"\b(preciso\s+de\s+ajuda|falar\s+com\s+(um\s+)?humano|fale\s+conosco|fala\s+conosco|"
+        r"quero\s+falar\s+com\s+(um\s+)?humano|tem\s+algu[eé]m|atendimento\s+humano|"
+        r"ajuda\s+humana|suporte\s+humano)\b",
+        t
+    ):
+        return True
+    # "apaga", "apagar", "deleta", "deletar" — sinônimos de remover
+    if re.search(r"^(apaga(r)?|delet(a|ar)|exclu(i|ir))\b", t):
         return True
 
     return False
@@ -220,11 +370,12 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             print(f"🎤➡️📝 Roteando áudio pelo text_handler")
             # Import aqui pra evitar import circular
             from src.handlers.text_handler import handle_text_message
-            # Normaliza a transcrição: o Whisper costuma colocar "." no fim de
-            # frases curtas (ex: "Resumo." / "Suporte."), o que faz o
-            # text_handler não reconhecer comandos que dependem de igualdade
-            # exata (texto_lower in [...]). Tira pontuação final.
-            texto_normalizado = re.sub(r"[.!?,;]+$", "", transcricao).strip()
+            # Normaliza a transcrição: tira pontuação final E prefixos
+            # conversacionais ("me dê o", "pode mostrar", etc.) pra que o
+            # text_handler reconheça o comando da mesma forma que reconhece
+            # quando o usuário digita.
+            texto_normalizado = _normalizar_comando_audio(transcricao)
+            print(f"🎤 Texto normalizado: {texto_normalizado!r}")
             resposta = await handle_text_message({
                 "text": {"body": texto_normalizado},
                 "key": {"remoteJid": remote_jid}
