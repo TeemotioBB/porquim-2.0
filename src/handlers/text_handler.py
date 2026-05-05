@@ -758,8 +758,8 @@ async def handle_text_message(message: dict) -> dict:
             }
         return {"type": "text", "content": "❌ Não consegui cancelar."}
 
-    # ── Lembrete: "meus lembretes" ou "ver lembretes" ────────────────────────
-    if re.search(r"\b(meus lembretes|ver lembretes|listar lembretes)\b", texto_lower):
+    # ── Lembrete: "meus lembretes" ou "ver lembretes" / "lembretes" ──────────
+    if texto_lower in ("lembretes", "meus lembretes", "ver lembretes", "listar lembretes"):
         lembretes = await buscar_lembretes_pendentes(numero)
         if not lembretes:
             return {"type": "text", "content": "📭 Você não tem lembretes agendados no momento.\n\nPara criar um:\n_'Me lembre da reunião hoje às 14:00'_"}
