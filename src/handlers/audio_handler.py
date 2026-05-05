@@ -46,6 +46,53 @@ def _detectar_entrada_texto(texto: str) -> bool:
     ))
 
 
+def _audio_sem_conteudo_util(transcricao: str) -> bool:
+    """
+    Retorna True se a transcrição estiver vazia, muito curta, sem letras,
+    ou for puro ruído que o Whisper "alucina" em áudios mudos
+    (ex: '.', '...', 'obrigado.', '[música]', 'thank you').
+    """
+    if not transcricao:
+        return True
+    t = transcricao.strip().lower()
+    # Tira pontuação/símbolos pra avaliar conteúdo
+    so_letras = re.sub(r"[^a-zA-ZáéíóúâêôãõçÁÉÍÓÚÂÊÔÃÕÇ]", "", t)
+    if len(so_letras) < 3:
+        return True
+    # Whisper costuma alucinar essas frases em áudios mudos/silenciosos
+    alucinacoes = (
+        "thank you", "thanks for watching", "obrigado", "obrigada",
+        "[música]", "[musica]", "(música)", "(musica)",
+        "legendas pela comunidade", "amara.org",
+        "subtítulos pela comunidade", "subtitulos pela comunidade",
+        "transcribed by", "tradução", "traducao",
+    )
+    if t in alucinacoes:
+        return True
+    # Frases muito curtas e que são apenas alucinações + pontuação
+    for a in alucinacoes:
+        if t.replace(".", "").replace(",", "").replace("!", "").strip() == a:
+            return True
+    return False
+
+
+def _extracao_invalida(dados: dict) -> bool:
+    """Retorna True se a extração de gasto/entrada não tem dados úteis."""
+    if not dados:
+        return True
+    try:
+        valor = float(dados.get("valor", 0))
+    except (TypeError, ValueError):
+        return True
+    desc = (dados.get("descricao") or "").strip()
+    # Sem valor (ou valor 0) ou sem descrição = extração inútil
+    if valor <= 0:
+        return True
+    if not desc or len(desc) < 2:
+        return True
+    return False
+
+
 def _precisa_text_handler(transcricao: str) -> bool:
     """
     Decide se a transcrição deve ser roteada pelo text_handler ao invés
@@ -60,7 +107,8 @@ def _precisa_text_handler(transcricao: str) -> bool:
         "resumo", "limite", "limites",
         "recorrentes", "parcelas",
         "remover", "editar",
-        "cancelar"
+        "cancelar",
+        "suporte", "atendente", "atendimento", "contato"
     )
     if any(t.startswith(c) for c in comandos_simples):
         return True
@@ -113,7 +161,21 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
     try:
         # Transcreve o áudio primeiro
         transcricao = await transcrever_audio(audio_bytes, mime_type)
-        print(f"🎤 Transcrição: {transcricao}")
+        print(f"🎤 Transcrição: {transcricao!r}")
+
+        # ── Áudio mudo / sem conteúdo útil ──────────────────────────────────────
+        if _audio_sem_conteudo_util(transcricao):
+            return {
+                "type": "text",
+                "content": (
+                    "🤔 Não consegui entender o que você falou no áudio.\n\n"
+                    "Pode ter ficado mudo ou com pouco volume. Tenta de novo "
+                    "falando algo como:\n"
+                    "🎤 _\"gastei 45 reais no iFood com cartão\"_\n"
+                    "🎤 _\"recebi 1000 de freelance\"_\n\n"
+                    "Ou manda em texto mesmo 😉"
+                )
+            }
 
         # ── Roteamento inteligente: se for comando/parcelado/recorrente/limite/lembrete,
         # passa pelo text_handler que tem toda a lógica completa ──────────────────────
@@ -132,7 +194,24 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
 
         # ── Verifica se é entrada de dinheiro ──
         if _detectar_entrada_texto(transcricao):
-            dados = await processar_entrada_texto(transcricao)
+            try:
+                dados = await processar_entrada_texto(transcricao)
+            except Exception as e:
+                print(f"⚠️ Falha ao extrair entrada do áudio: {e}")
+                dados = None
+
+            if _extracao_invalida(dados):
+                return {
+                    "type": "text",
+                    "content": (
+                        f"🗣️ _\"{transcricao}\"_\n\n"
+                        "🤔 Entendi que parece uma entrada de dinheiro, mas "
+                        "não consegui identificar o valor.\n\n"
+                        "Tenta de novo falando o valor, ex:\n"
+                        "🎤 _\"recebi 1000 de freelance\"_"
+                    )
+                }
+
             entrada_id = await salvar_entrada(numero, dados, fonte="audio")
             await salvar_memoria(numero, ultima_entrada_id=entrada_id)
 
@@ -147,7 +226,27 @@ async def handle_audio_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             return {"type": "text", "content": card}
 
         # ── Caso contrário, processa como gasto comum ──
-        dados = await processar_gasto_audio(audio_bytes, mime_type)
+        try:
+            dados = await processar_gasto_audio(audio_bytes, mime_type)
+        except Exception as e:
+            print(f"⚠️ Falha ao extrair gasto do áudio: {e}")
+            dados = None
+
+        # Se a extração resultar em valor 0 ou descrição vazia, NÃO registra
+        # (era exatamente o bug: áudio mudo virava gasto de R$0,00).
+        if _extracao_invalida(dados):
+            return {
+                "type": "text",
+                "content": (
+                    f"🗣️ _\"{transcricao}\"_\n\n"
+                    "🤔 Não consegui identificar um gasto válido nesse áudio.\n\n"
+                    "Tenta falar algo como:\n"
+                    "🎤 _\"gastei 45 reais no iFood com cartão\"_\n"
+                    "🎤 _\"uber 27 reais pix\"_\n\n"
+                    "Ou se for outro comando, digita *ajuda* pra ver as opções."
+                )
+            }
+
         dados["transcricao"] = transcricao  # reusa a transcrição já feita
         gasto_id = await salvar_gasto(numero, dados, fonte="audio")
         ultimo_gasto[numero] = gasto_id
