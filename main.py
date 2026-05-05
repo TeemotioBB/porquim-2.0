@@ -946,45 +946,68 @@ async def testar_pagamento(payment_id: str, senha: str = ""):
 async def admin_assinantes(senha: str = ""):
     if not senha or senha != os.environ.get("ADMIN_SECRET", ""):
         raise HTTPException(status_code=403, detail="Acesso negado")
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # LEFT JOIN: assinaturas de teste grátis não têm token,
-        # então valor_pago / payment_id ficam NULL pra elas.
-        rows = await conn.fetch("""
-            SELECT
-                a.usuario,
-                a.plano,
-                a.data_inicio,
-                a.data_expiracao,
-                a.status,
-                t.valor_pago,
-                t.payment_id
-            FROM assinaturas a
-            LEFT JOIN tokens t ON a.token = t.token
-            ORDER BY a.data_expiracao ASC
-        """)
-    agora = datetime.now(timezone.utc)
-    resultado = []
-    for r in rows:
-        expira = r["data_expiracao"]
-        if expira.tzinfo is None:
-            expira = expira.replace(tzinfo=timezone.utc)
-        dias = (expira - agora).days
-        num = r["usuario"].replace("@s.whatsapp.net", "")
-        num_wa = num if num.startswith("55") else f"55{num}"
-        resultado.append({
-            "usuario": num,
-            "whatsapp_link": f"https://wa.me/{num_wa}",
-            "plano": r["plano"],
-            "valor_pago": float(r["valor_pago"]) if r["valor_pago"] is not None else 0.0,
-            "payment_id": r["payment_id"],
-            "data_inicio": r["data_inicio"].strftime("%d/%m/%Y"),
-            "data_expiracao": expira.strftime("%d/%m/%Y"),
-            "dias_restantes": dias,
-            "status": "ativo" if dias > 0 else "expirado",
-            "alerta": "vence_em_breve" if 0 < dias <= 7 else ("expirado" if dias <= 0 else "ok")
-        })
-    return resultado
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # LEFT JOIN: assinaturas de teste grátis não têm token,
+            # então valor_pago / payment_id ficam NULL pra elas.
+            rows = await conn.fetch("""
+                SELECT
+                    a.usuario,
+                    a.plano,
+                    a.data_inicio,
+                    a.data_expiracao,
+                    a.status,
+                    t.valor_pago,
+                    t.payment_id
+                FROM assinaturas a
+                LEFT JOIN tokens t ON a.token = t.token
+                ORDER BY a.data_expiracao ASC
+            """)
+        agora = datetime.now(timezone.utc)
+        resultado = []
+        for r in rows:
+            try:
+                expira = r["data_expiracao"]
+                if expira is None:
+                    # registro corrompido — pula em vez de derrubar a página
+                    continue
+                if expira.tzinfo is None:
+                    expira = expira.replace(tzinfo=timezone.utc)
+
+                inicio = r["data_inicio"]
+                if inicio is None:
+                    inicio_str = "—"
+                else:
+                    inicio_str = inicio.strftime("%d/%m/%Y")
+
+                dias = (expira - agora).days
+                num = (r["usuario"] or "").replace("@s.whatsapp.net", "")
+                num_wa = num if num.startswith("55") else f"55{num}"
+
+                resultado.append({
+                    "usuario": num,
+                    "whatsapp_link": f"https://wa.me/{num_wa}",
+                    "plano": r["plano"] or "desconhecido",
+                    "valor_pago": float(r["valor_pago"]) if r["valor_pago"] is not None else 0.0,
+                    "payment_id": r["payment_id"],
+                    "data_inicio": inicio_str,
+                    "data_expiracao": expira.strftime("%d/%m/%Y"),
+                    "dias_restantes": dias,
+                    "status": "ativo" if dias > 0 else "expirado",
+                    "alerta": "vence_em_breve" if 0 < dias <= 7 else ("expirado" if dias <= 0 else "ok")
+                })
+            except Exception as e_row:
+                # Loga e segue — uma linha ruim não pode derrubar o painel
+                print(f"⚠️ [admin] linha ignorada: {e_row} | row={dict(r) if r else r}")
+                continue
+        return resultado
+    except Exception as e:
+        # Log detalhado pra aparecer no Railway / console
+        import traceback
+        print(f"❌ [admin/assinantes] erro: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erro no servidor: {type(e).__name__}: {e}")
 
 
 # ════════════════════════════════════════════════════════════════════
