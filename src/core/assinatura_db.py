@@ -30,7 +30,7 @@ async def create_assinatura_tables():
             -- Tabela de assinaturas ativas (vinculadas a um número de WhatsApp)
             CREATE TABLE IF NOT EXISTS assinaturas (
                 usuario         VARCHAR(50) PRIMARY KEY,  -- remoteJid do WhatsApp
-                token           VARCHAR(20) NOT NULL REFERENCES tokens(token),
+                token           VARCHAR(20) REFERENCES tokens(token),
                 plano           VARCHAR(20) NOT NULL,
                 data_inicio     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 data_expiracao  TIMESTAMPTZ NOT NULL,
@@ -40,7 +40,23 @@ async def create_assinatura_tables():
 
             CREATE INDEX IF NOT EXISTS idx_assinaturas_status ON assinaturas(status);
             CREATE INDEX IF NOT EXISTS idx_assinaturas_expiracao ON assinaturas(data_expiracao);
+
+            -- Tabela de quem já consumiu o teste gratuito (3 dias)
+            -- Uma linha por número (qualquer variante de JID resolve antes
+            -- de inserir, pra impedir reuso com/sem 9 dígito etc).
+            CREATE TABLE IF NOT EXISTS testes_gratis (
+                usuario     VARCHAR(50) PRIMARY KEY,
+                criado_em   TIMESTAMPTZ DEFAULT NOW()
+            );
         """)
+        # IMPORTANTE: bancos antigos podem ter o NOT NULL em assinaturas.token,
+        # mas agora teste cria assinatura sem token. Garantimos que é nullable.
+        try:
+            await conn.execute(
+                "ALTER TABLE assinaturas ALTER COLUMN token DROP NOT NULL"
+            )
+        except Exception:
+            pass  # se já estiver nullable, segue normal
     print("✅ Tabelas de assinatura criadas!")
 
 
@@ -115,12 +131,14 @@ async def ativar_assinatura(usuario: str, token: str) -> dict:
         if tok["usado"]:
             return {"ok": False, "motivo": "token_ja_usado"}
 
-        # 3. Calcula expiração — soma dias restantes se já tiver assinatura ativa
+        # 3. Calcula expiração — soma dias restantes APENAS se já tiver
+        #    assinatura PAGA ativa (renovação). Não soma dias do teste grátis,
+        #    senão quem fez teste pagaria menos do que quem nunca testou.
         agora = datetime.now(timezone.utc)
         dias_novos = 365 if tok["plano"] == "anual" else 30
 
         dias_restantes = 0
-        if assinatura:
+        if assinatura and assinatura["plano"] in ("mensal", "anual"):
             expira_atual = assinatura["data_expiracao"]
             if expira_atual.tzinfo is None:
                 expira_atual = expira_atual.replace(tzinfo=timezone.utc)
@@ -234,3 +252,120 @@ async def buscar_assinatura(usuario: str) -> dict | None:
             "SELECT * FROM assinaturas WHERE usuario = $1", usuario
         )
         return dict(row) if row else None
+
+
+# ── Teste grátis (3 dias) ────────────────────────────────────────────────────
+
+async def ativar_teste_gratis(usuario: str, dias: int = 3) -> dict:
+    """
+    Ativa um período de teste de N dias para o usuário.
+
+    Regras:
+      - Cada número (considerando todas as variantes de JID com/sem 55, com/sem 9)
+        só pode usar o teste UMA VEZ na vida — a tabela testes_gratis serve
+        de registro permanente.
+      - Se o usuário já tem assinatura paga ATIVA: não cria teste, retorna
+        "ja_assinante" (não faz sentido, já tem acesso).
+      - Se o usuário JÁ FOI cliente pago algum dia (mesmo expirado): nega o
+        teste com motivo "ja_foi_cliente". Senão a pessoa cancela e pede
+        teste de novo, viraria loophole.
+      - Se já usou teste antes: nega com "ja_testou".
+      - Caso contrário: insere em testes_gratis e cria/atualiza a linha de
+        assinatura com plano="teste" e expiração em N dias.
+
+    Retornos possíveis:
+      {"ok": True, "expira": <datetime>, "dias": 3}
+      {"ok": False, "motivo": "ja_testou"}                  # já usou teste antes (e ele expirou)
+      {"ok": False, "motivo": "teste_ja_ativo", "dias_restantes": int}
+      {"ok": False, "motivo": "ja_assinante", "dias_restantes": int}
+      {"ok": False, "motivo": "ja_foi_cliente"}
+    """
+    variantes = _variantes_jid(usuario)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+
+        # 1. Já tem assinatura paga ativa? (NÃO cria teste)
+        ativa_paga = await conn.fetchrow(
+            """
+            SELECT * FROM assinaturas
+             WHERE usuario = ANY($1::text[])
+               AND plano IN ('mensal', 'anual')
+               AND data_expiracao > NOW()
+            """,
+            variantes,
+        )
+        if ativa_paga:
+            expira = ativa_paga["data_expiracao"]
+            if expira.tzinfo is None:
+                expira = expira.replace(tzinfo=timezone.utc)
+            dias_restantes = (expira - datetime.now(timezone.utc)).days
+            return {
+                "ok": False,
+                "motivo": "ja_assinante",
+                "dias_restantes": dias_restantes,
+            }
+
+        # 1b. Já tem TESTE ativo agora? (mensagem amigável diferente)
+        teste_ativo = await conn.fetchrow(
+            """
+            SELECT * FROM assinaturas
+             WHERE usuario = ANY($1::text[])
+               AND plano = 'teste'
+               AND data_expiracao > NOW()
+            """,
+            variantes,
+        )
+        if teste_ativo:
+            expira = teste_ativo["data_expiracao"]
+            if expira.tzinfo is None:
+                expira = expira.replace(tzinfo=timezone.utc)
+            dias_restantes = (expira - datetime.now(timezone.utc)).days
+            return {
+                "ok": False,
+                "motivo": "teste_ja_ativo",
+                "dias_restantes": dias_restantes,
+            }
+
+        # 2. Já foi cliente pago algum dia? (também NÃO concede teste)
+        ja_pagou = await conn.fetchrow(
+            """
+            SELECT 1 FROM assinaturas
+             WHERE usuario = ANY($1::text[])
+               AND plano IN ('mensal', 'anual')
+            """,
+            variantes,
+        )
+        if ja_pagou:
+            return {"ok": False, "motivo": "ja_foi_cliente"}
+
+        # 3. Já usou o teste antes (mas já expirou)?
+        ja_testou = await conn.fetchrow(
+            "SELECT 1 FROM testes_gratis WHERE usuario = ANY($1::text[])",
+            variantes,
+        )
+        if ja_testou:
+            return {"ok": False, "motivo": "ja_testou"}
+
+        # 4. OK, libera o teste
+        agora = datetime.now(timezone.utc)
+        expira = agora + timedelta(days=dias)
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO testes_gratis (usuario) VALUES ($1) "
+                "ON CONFLICT (usuario) DO NOTHING",
+                usuario,
+            )
+            await conn.execute(
+                """
+                INSERT INTO assinaturas (usuario, token, plano, data_inicio, data_expiracao, status)
+                VALUES ($1, NULL, 'teste', $2, $3, 'ativo')
+                ON CONFLICT (usuario) DO UPDATE SET
+                    token = NULL,
+                    plano = 'teste',
+                    data_inicio = $2,
+                    data_expiracao = $3,
+                    status = 'ativo'
+                """,
+                usuario, agora, expira,
+            )
+        return {"ok": True, "expira": expira, "dias": dias}
