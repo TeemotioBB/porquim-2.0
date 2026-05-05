@@ -19,4 +19,7 @@ class Settings:
     PORT: int = int(os.environ.get("PORT", 8080))
     RESET_SECRET: str = os.environ.get("RESET_SECRET", "johnny-reset-2026")
 
+    # WhatsApp de suporte (apenas dígitos, com DDI). Default: 31991316890 (BR).
+    SUPPORT_WHATSAPP: str = os.environ.get("SUPPORT_WHATSAPP", "5531991316890")
+
 settings = Settings()
