@@ -47,6 +47,7 @@ from src.core.assinatura_db import (
     verificar_acesso,
     gerar_token,
     buscar_token_por_payment_id,
+    ativar_teste_gratis,
 )
 
 from src.handlers.text_handler import handle_text_message
@@ -74,6 +75,14 @@ EMOJI_ENTRADA_CAT = {
     "Salário": "💼", "Freelance": "💻", "Investimento": "📈",
     "Presente": "🎁", "Reembolso": "🔄", "Outros": "📦",
 }
+
+# ── Frase mágica para liberar teste grátis de 3 dias ─────────────────────────
+# Configurável via env var TRIAL_PHRASE; default é a frase pedida pelo dono.
+FRASE_TESTE_GRATIS = os.environ.get(
+    "TRIAL_PHRASE",
+    "Oi, quero testar o Johnny por 3 dias",
+).strip().lower()
+DIAS_TESTE_GRATIS = int(os.environ.get("TRIAL_DAYS", "3"))
 
 def emoji_para(cat: str) -> str:
     return EMOJI_CAT.get(cat, "📦")
@@ -939,6 +948,8 @@ async def admin_assinantes(senha: str = ""):
         raise HTTPException(status_code=403, detail="Acesso negado")
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # LEFT JOIN: assinaturas de teste grátis não têm token,
+        # então valor_pago / payment_id ficam NULL pra elas.
         rows = await conn.fetch("""
             SELECT
                 a.usuario,
@@ -949,7 +960,7 @@ async def admin_assinantes(senha: str = ""):
                 t.valor_pago,
                 t.payment_id
             FROM assinaturas a
-            JOIN tokens t ON a.token = t.token
+            LEFT JOIN tokens t ON a.token = t.token
             ORDER BY a.data_expiracao ASC
         """)
     agora = datetime.now(timezone.utc)
@@ -965,7 +976,8 @@ async def admin_assinantes(senha: str = ""):
             "usuario": num,
             "whatsapp_link": f"https://wa.me/{num_wa}",
             "plano": r["plano"],
-            "valor_pago": float(r["valor_pago"]),
+            "valor_pago": float(r["valor_pago"]) if r["valor_pago"] is not None else 0.0,
+            "payment_id": r["payment_id"],
             "data_inicio": r["data_inicio"].strftime("%d/%m/%Y"),
             "data_expiracao": expira.strftime("%d/%m/%Y"),
             "dias_restantes": dias,
@@ -1045,6 +1057,54 @@ async def evolution_webhook(request: Request, any: str = None):
             )
         return {"status": "ok"}
 
+    # ── Frase mágica de teste grátis ──────────────────────────────────────────
+    if text_body and text_body.strip().lower() == FRASE_TESTE_GRATIS:
+        resultado = await ativar_teste_gratis(remote_jid, dias=DIAS_TESTE_GRATIS)
+        if resultado["ok"]:
+            expira = resultado["expira"]
+            dias = resultado["dias"]
+            await _enviar_resposta(remote_jid,
+                f"🎁 *Teste liberado!*\n\n"
+                f"Você ganhou *{dias} dias* gratuitos pra experimentar o Johnny 🐹\n"
+                f"📅 Válido até {expira.strftime('%d/%m/%Y')}\n\n"
+                f"Já pode começar! Digite *ajuda* pra ver tudo que dá pra fazer.\n\n"
+                f"_Curtiu? Você pode assinar a qualquer momento em:_\n"
+                f"👉 https://www.meujohnny.com.br/"
+            )
+        elif resultado["motivo"] == "ja_assinante":
+            dias_rest = resultado.get("dias_restantes", 0)
+            await _enviar_resposta(remote_jid,
+                f"😎 Você já tem uma assinatura ativa!\n\n"
+                f"📅 Restam {dias_rest} dias pra você.\n"
+                f"Aproveite o Johnny à vontade 🐹"
+            )
+        elif resultado["motivo"] == "teste_ja_ativo":
+            dias_rest = resultado.get("dias_restantes", 0)
+            await _enviar_resposta(remote_jid,
+                f"😉 Seu teste gratuito já está ativo!\n\n"
+                f"📅 Você ainda tem {dias_rest} dia(s) pra usar o Johnny 🐹\n\n"
+                f"_Curtiu? Pode assinar a qualquer momento:_\n"
+                f"👉 https://www.meujohnny.com.br/"
+            )
+        elif resultado["motivo"] == "ja_foi_cliente":
+            await _enviar_resposta(remote_jid,
+                "💚 Que bom te ver de volta!\n\n"
+                "Como você já é cliente do Johnny, o teste gratuito não está "
+                "disponível. Mas você pode renovar sua assinatura agora:\n"
+                "• 💰 Mensal: R$ 9,90\n"
+                "• 🎉 Anual: R$ 67,00\n\n"
+                "👉 https://www.meujohnny.com.br/"
+            )
+        elif resultado["motivo"] == "ja_testou":
+            await _enviar_resposta(remote_jid,
+                "🤔 Você já usou o teste gratuito antes.\n\n"
+                "Pra continuar usando o Johnny, é só assinar:\n"
+                "• 💰 Mensal: R$ 9,90\n"
+                "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
+                "👉 https://www.meujohnny.com.br/"
+            )
+        return {"status": "ok"}
+
     _jid_num = remote_jid.replace("@s.whatsapp.net", "")
     _jid_sem55 = _jid_num[2:] if _jid_num.startswith("55") and len(_jid_num) > 11 else _jid_num
 
@@ -1086,13 +1146,23 @@ async def evolution_webhook(request: Request, any: str = None):
                     "_Após o pagamento, você receberá um token para ativar seu acesso aqui._"
                 )
             elif acesso["motivo"] == "expirado":
-                await _enviar_resposta(remote_jid,
-                    f"⚠️ Sua assinatura expirou.\n\n"
-                    f"Renove agora para continuar usando o Johnny 🐹:\n"
-                    f"• 💰 Mensal: R$ 9,90\n"
-                    f"• 🎉 Anual: R$ 67,00\n\n"
-                    f"👉 https://www.meujohnny.com.br/"
-                )
+                # Mensagem diferente se foi um teste grátis ou assinatura paga
+                if acesso.get("plano") == "teste":
+                    await _enviar_resposta(remote_jid,
+                        "⏰ *Seu teste gratuito de 3 dias acabou.*\n\n"
+                        "Curtiu o Johnny? Continue usando agora:\n"
+                        "• 💰 Mensal: R$ 9,90\n"
+                        "• 🎉 Anual: R$ 67,00 _(economize 72%!)_\n\n"
+                        "👉 https://www.meujohnny.com.br/"
+                    )
+                else:
+                    await _enviar_resposta(remote_jid,
+                        f"⚠️ Sua assinatura expirou.\n\n"
+                        f"Renove agora para continuar usando o Johnny 🐹:\n"
+                        f"• 💰 Mensal: R$ 9,90\n"
+                        f"• 🎉 Anual: R$ 67,00\n\n"
+                        f"👉 https://www.meujohnny.com.br/"
+                    )
             return {"status": "ok"}
 
     response = None
