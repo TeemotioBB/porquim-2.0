@@ -117,22 +117,52 @@ async def processar_gasto_audio(audio_bytes: bytes, mime_type: str = "audio/ogg"
 
 
 async def processar_comprovante_foto(imagem_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
-    """Lê um comprovante/foto e extrai dados de gasto usando visão."""
+    """Lê um comprovante/foto e extrai dados de gasto usando visão.
+
+    Retorna um dict com:
+      - "modo": "unico" ou "multiplos"
+      - se "unico": chaves no nível raiz (descricao, valor, categoria, ...)
+      - se "multiplos": chave "itens" com lista de dicts (cada um um gasto),
+        e também "total_geral" e "forma_pagamento_geral".
+
+    Para retrocompatibilidade, quando "modo" == "unico" o dict no nível raiz
+    contém todos os campos esperados antes (valor, descricao, ...).
+    """
     if not openai:
         raise RuntimeError("OPENAI_API_KEY não configurada para leitura de fotos.")
 
     hoje = str(date.today())
     b64 = base64.b64encode(imagem_bytes).decode()
-    prompt = f"""
-Você é o Johnny, assistente financeiro brasileiro.
-Analise esta imagem de comprovante/nota fiscal e extraia em JSON:
-- valor: número float total da compra (ex: 56.00)
-- descricao: descrição do estabelecimento ou produto principal
-- categoria: uma de ({CATEGORIAS})
-- forma_pagamento: Pix, Cartão, Dinheiro ou Desconhecido
-- data: data no formato DD-MM-YYYY (use {hoje} se não visível)
+    prompt = f"""Você é o Johnny, assistente financeiro brasileiro.
+Analise esta imagem de comprovante / nota fiscal / cupom fiscal / recibo / extrato e identifique os itens comprados.
 
-Responda APENAS com JSON válido, sem markdown.
+REGRA IMPORTANTE:
+- Se a imagem listar VÁRIOS ITENS / PRODUTOS distintos (cupom fiscal de mercado, padaria, farmácia, etc), retorne CADA item separadamente.
+- Se for um comprovante de um pagamento único (ex: Pix enviado, boleto, fatura, recibo de Uber), retorne UM ÚNICO item.
+
+Responda APENAS com JSON válido, sem markdown, no formato:
+
+{{
+  "tipo": "MULTIPLOS" ou "UNICO",
+  "forma_pagamento": "Pix" | "Cartão" | "Dinheiro" | "Desconhecido",
+  "data": "DD-MM-YYYY (use {hoje} se não visível)",
+  "itens": [
+    {{
+      "descricao": "nome do produto / estabelecimento",
+      "valor": número float (ex: 5.90),
+      "categoria": uma de ({CATEGORIAS})
+    }}
+    // ... uma entrada por item se MULTIPLOS, apenas uma se UNICO
+  ]
+}}
+
+Exemplos:
+- Cupom de mercado com Banana 5,90, Vinho 24,90, Sabonete 3,50 →
+  tipo MULTIPLOS, itens=[banana 5.90 Alimentação, vinho 24.90 Alimentação, sabonete 3.50 Outros].
+- Comprovante de Pix de R$ 100 para um restaurante →
+  tipo UNICO, itens=[{{"descricao": "Restaurante X", "valor": 100, "categoria": "Alimentação"}}]
+
+NÃO some os itens. NÃO crie um item "Total" — o total é apenas a soma natural dos itens.
 """
     resp = await openai.chat.completions.create(
         model="gpt-4o",
@@ -144,13 +174,63 @@ Responda APENAS com JSON válido, sem markdown.
             ]
         }],
         temperature=0.2,
-        max_tokens=500
+        max_tokens=1500,
     )
     raw = resp.choices[0].message.content.strip()
     raw = raw.replace("```json", "").replace("```", "").strip()
-    dados = json.loads(raw)
-    dados["hashtag"] = _gerar_hashtag(dados.get("descricao", "foto"))
-    return dados
+    parsed = json.loads(raw)
+
+    tipo = (parsed.get("tipo") or "UNICO").upper()
+    forma_pagamento = parsed.get("forma_pagamento") or "Desconhecido"
+    data_comprovante = parsed.get("data") or hoje
+    itens_raw = parsed.get("itens") or []
+
+    # Sanitização: remove itens sem valor ou descrição, e itens chamados "Total"
+    itens_limpos: list[dict] = []
+    for it in itens_raw:
+        try:
+            v = float(it.get("valor", 0))
+        except (TypeError, ValueError):
+            v = 0
+        desc = (it.get("descricao") or "").strip()
+        if v <= 0 or not desc:
+            continue
+        if desc.lower() in ("total", "subtotal", "total geral", "valor total"):
+            continue
+        cat = it.get("categoria") or "Outros"
+        itens_limpos.append({
+            "descricao": desc,
+            "valor": round(v, 2),
+            "categoria": cat,
+            "forma_pagamento": forma_pagamento,
+            "data": data_comprovante,
+            "hashtag": _gerar_hashtag(f"{desc}|{v}|{data_comprovante}"),
+        })
+
+    if not itens_limpos:
+        # Fallback: nenhum item válido encontrado
+        raise ValueError("Não foi possível extrair itens do comprovante.")
+
+    if tipo == "MULTIPLOS" and len(itens_limpos) > 1:
+        return {
+            "modo": "multiplos",
+            "itens": itens_limpos,
+            "forma_pagamento_geral": forma_pagamento,
+            "data": data_comprovante,
+            "total_geral": round(sum(i["valor"] for i in itens_limpos), 2),
+        }
+
+    # Caminho de item único — mantém o formato antigo (chaves no nível raiz)
+    item = itens_limpos[0]
+    return {
+        "modo": "unico",
+        "descricao": item["descricao"],
+        "valor": item["valor"],
+        "categoria": item["categoria"],
+        "forma_pagamento": forma_pagamento,
+        "data": data_comprovante,
+        "hashtag": item["hashtag"],
+    }
 
 
 async def classificar_foto_comprovante(imagem_bytes: bytes, mime_type: str = "image/jpeg") -> str:
