@@ -169,7 +169,11 @@ function renderStats() {
   const ativos = dados.filter(d => d.alerta === 'ok').length;
   const vencendo = dados.filter(d => d.alerta === 'vence_em_breve').length;
   const expirados = dados.filter(d => d.alerta === 'expirado').length;
-  const mrr = dados.filter(d => d.status === 'ativo').reduce((s, d) => s + (d.plano === 'mensal' ? d.valor_pago : d.valor_pago / 12), 0);
+  // MRR: só conta planos pagos (mensal/anual). Testes não entram.
+  const mrr = dados
+    .filter(d => d.status === 'ativo' && (d.plano === 'mensal' || d.plano === 'anual'))
+    .reduce((s, d) => s + (d.plano === 'mensal' ? d.valor_pago : d.valor_pago / 12), 0);
+  const testes_ativos = dados.filter(d => d.plano === 'teste' && d.status === 'ativo').length;
 
   document.getElementById('total-badge').textContent = `(${total})`;
   document.getElementById('stats').innerHTML = `
@@ -177,6 +181,7 @@ function renderStats() {
     <div class="stat"><div class="stat-val warn">${vencendo}</div><div class="stat-lbl">Vence em 7d</div></div>
     <div class="stat"><div class="stat-val red">${expirados}</div><div class="stat-lbl">Expirados</div></div>
     <div class="stat"><div class="stat-val green">R$${mrr.toFixed(0)}</div><div class="stat-lbl">MRR est.</div></div>
+    <div class="stat"><div class="stat-val">${testes_ativos}</div><div class="stat-lbl">Em teste</div></div>
   `;
 }
 
@@ -200,7 +205,13 @@ function renderLista() {
     const badgeClass = d.alerta === 'expirado' ? 'badge-expirado' : d.alerta === 'vence_em_breve' ? 'badge-vence' : 'badge-ativo';
     const badgeText = d.alerta === 'expirado' ? '✕ Expirado' : d.alerta === 'vence_em_breve' ? `⚡ Vence em ${d.dias_restantes}d` : `✓ ${d.dias_restantes}d restantes`;
     const itemClass = d.alerta === 'expirado' ? 'expirado' : d.alerta === 'vence_em_breve' ? 'vence_em_breve' : 'ok';
-    const planoLabel = d.plano === 'anual' ? '🎉 Anual' : '💰 Mensal';
+    const planoLabel =
+      d.plano === 'anual'  ? '🎉 Anual'  :
+      d.plano === 'mensal' ? '💰 Mensal' :
+      d.plano === 'teste'  ? '🎁 Teste'  : `❓ ${d.plano}`;
+    const valorLabel = d.plano === 'teste'
+      ? 'Grátis'
+      : `R$ ${(d.valor_pago || 0).toFixed(2).replace('.',',')}`;
 
     return `<div class="item ${itemClass}">
       <div class="item-top">
@@ -211,7 +222,7 @@ function renderLista() {
         <span><strong>${planoLabel}</strong></span>
         <span>Início: <strong>${d.data_inicio}</strong></span>
         <span>Expira: <strong>${d.data_expiracao}</strong></span>
-        <span>Valor: <strong>R$ ${d.valor_pago.toFixed(2).replace('.',',')}</strong></span>
+        <span>Valor: <strong>${valorLabel}</strong></span>
       </div>
       <div class="item-actions">
         <a class="btn-wa" href="${d.whatsapp_link}" target="_blank">
