@@ -22,6 +22,15 @@ _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
 _Para editar responda: *editar*_"""
 
+CARD_FOTO_ITEM = """✅ *Item registrado!* 📷
+
+📍 {descricao}
+💰 R$ {valor:.2f}
+🏷️ {categoria}
+💳 {forma_pagamento}
+📅 {data}
+🔖 {hashtag}"""
+
 CARD_FOTO_ENTRADA = """✅ *Recebimento Registrado!* 📷
 
 📍 {descricao}
@@ -83,14 +92,16 @@ async def handle_image_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
             )
             return {"type": "text", "content": card}
 
-        else:
-            # Comprovante de pagamento (gasto)
-            dados = await processar_comprovante_foto(image_bytes, mime_type)
+        # ── Comprovante de pagamento (gasto) ─────────────────────────────────
+        dados = await processar_comprovante_foto(image_bytes, mime_type)
+
+        # Caso UM ÚNICO item (formato antigo) ────────────────────────────────
+        if dados.get("modo") == "unico" or "itens" not in dados:
+            # Se vier no formato antigo (sem chave "modo"), normaliza
             gasto_id = await salvar_gasto(numero, dados, fonte="foto")
             ultimo_gasto[numero] = gasto_id
             await salvar_memoria(numero, ultimo_gasto_id=gasto_id)
 
-            # Passa categoria pra checar limite por categoria também
             alerta = await verificar_limite_pos_gasto(numero, dados.get("categoria")) or ""
 
             card = CARD_FOTO.format(
@@ -103,6 +114,77 @@ async def handle_image_message(msg_data: dict, remote_jid: str, ultimo_gasto: di
                 alerta=alerta,
             )
             return {"type": "text", "content": card}
+
+        # Caso MÚLTIPLOS ITENS ────────────────────────────────────────────────
+        itens = dados["itens"]
+        ids_registrados: list[int] = []
+        cards: list[str] = []
+        categorias_envolvidas: set[str] = set()
+
+        for item in itens:
+            try:
+                gasto_id = await salvar_gasto(numero, item, fonte="foto")
+                ids_registrados.append(gasto_id)
+                categorias_envolvidas.add(item["categoria"])
+                cards.append(CARD_FOTO_ITEM.format(
+                    descricao=item["descricao"],
+                    valor=float(item["valor"]),
+                    categoria=item["categoria"],
+                    forma_pagamento=item["forma_pagamento"],
+                    data=item["data"],
+                    hashtag=item["hashtag"],
+                ))
+            except Exception as e:
+                print(f"⚠️ Falha ao salvar item do comprovante: {e}")
+
+        if not ids_registrados:
+            return {
+                "type": "text",
+                "content": "😅 Não consegui ler os itens do comprovante. Verifique se a foto está nítida."
+            }
+
+        # Memória: último gasto = último id; lote = todos os ids (pra "remover" apagar todos)
+        ultimo_gasto[numero] = ids_registrados[-1]
+        await salvar_memoria(numero, ultimo_gasto_id=ids_registrados[-1], lote_ids=ids_registrados)
+
+        # Verifica limites: geral + cada categoria envolvida (sem duplicar)
+        avisos = []
+        # Geral primeiro (sem categoria)
+        aviso_geral = await verificar_limite_pos_gasto(numero, None)
+        if aviso_geral:
+            avisos.append(aviso_geral.strip())
+        for cat in categorias_envolvidas:
+            aviso_cat = await verificar_limite_pos_gasto(numero, cat)
+            # verificar_limite_pos_gasto retorna geral+categoria; queremos só categoria aqui
+            # então pegamos apenas a parte da categoria. Como ela combina ambos com "\n\n",
+            # pra evitar duplicar o aviso geral, comparamos.
+            if aviso_cat:
+                aviso_cat_strip = aviso_cat.strip()
+                # Remove o pedaço de aviso geral se já apareceu
+                if aviso_geral and aviso_geral.strip() in aviso_cat_strip:
+                    extra = aviso_cat_strip.replace(aviso_geral.strip(), "").strip()
+                    if extra:
+                        avisos.append(extra)
+                else:
+                    # Se geral não estourou, aviso_cat já contém só a parte de categoria
+                    avisos.append(aviso_cat_strip)
+
+        total = sum(float(i["valor"]) for i in itens)
+        cabecalho = (
+            f"📷 *Comprovante Lido!*\n\n"
+            f"Identifiquei *{len(ids_registrados)} itens* nesse comprovante "
+            f"(total: R$ {total:.2f}). Cada um foi registrado separadamente:\n"
+        )
+        rodape = (
+            "\n\n_Salvo com sucesso!_ 🎉\n"
+            "_Para remover **todos** estes itens responda: *remover*_"
+        )
+        bloco_avisos = ("\n\n" + "\n\n".join(avisos)) if avisos else ""
+
+        return {
+            "type": "text",
+            "content": cabecalho + "\n" + "\n\n─────────────\n\n".join(cards) + rodape + bloco_avisos,
+        }
 
     except Exception as e:
         print(f"❌ Erro ao processar imagem: {e}")
