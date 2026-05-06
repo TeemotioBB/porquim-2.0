@@ -92,7 +92,11 @@ CARD_GASTO = """✅ *Gasto Registrado!*
 
 _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
-_Para editar responda: *editar*_"""
+_Para editar responda: *editar*_
+
+📊 Veja seu dashboard: https://dashboard-porquim-theta.vercel.app"""
+
+
 
 CARD_ENTRADA = """✅ *Entrada Registrada!*
 
@@ -103,7 +107,9 @@ CARD_ENTRADA = """✅ *Entrada Registrada!*
 🔖 {hashtag}
 
 _Salvo com sucesso!_ 🎉
-_Para remover esta entrada responda: *remover entrada*_"""
+_Para remover esta entrada responda: *remover entrada*_
+
+📊 Veja seu dashboard: https://dashboard-porquim-theta.vercel.app"""
 
 MESES_NOMES = {
     "janeiro": 1, "fevereiro": 2, "março": 3, "marco": 3,
