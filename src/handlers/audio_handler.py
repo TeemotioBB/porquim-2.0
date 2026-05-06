@@ -21,7 +21,9 @@ CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 
 _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
-_Para editar responda: *editar*_"""
+_Para editar responda: *editar*_
+
+📊 Veja seu dashboard: https://seu-dashboard.railway.app"""
 
 CARD_AUDIO_ENTRADA = """✅ *Entrada Registrada por Áudio!* 🎤
 
@@ -34,7 +36,9 @@ CARD_AUDIO_ENTRADA = """✅ *Entrada Registrada por Áudio!* 🎤
 🔖 {hashtag}
 
 _Salvo com sucesso!_ 🎉
-_Para remover esta entrada responda: *remover entrada*_"""
+_Para remover esta entrada responda: *remover entrada*_
+
+📊 Veja seu dashboard: https://seu-dashboard.railway.app"""
 
 
 def _detectar_entrada_texto(texto: str) -> bool:
