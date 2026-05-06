@@ -22,6 +22,7 @@ CARD_AUDIO = """✅ *Gasto Registrado por Áudio!* 🎤
 _Salvo com sucesso!_ 🎉
 _Para remover este gasto responda: *remover*_
 _Para editar responda: *editar*_"""
+📊 Veja seu dashboard: https://dashboard-porquim-theta.vercel.app
 
 CARD_AUDIO_ENTRADA = """✅ *Entrada Registrada por Áudio!* 🎤
 
